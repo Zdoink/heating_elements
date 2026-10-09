@@ -1,4 +1,6 @@
-# Arduino Heating Elements
+# Heating Elements
+
+**Repository:** https://github.com/Zdoink/heating_elements
 
 Temperature-controlled heating enclosure built around an **Arduino Uno R3**.
 A **Type K thermocouple** measures the enclosure temperature, and the Arduino
@@ -89,8 +91,16 @@ install prompts during setup.
 
 ### 2. Download this project
 
-On this repo's GitHub page, click the green **Code** button, then **Download ZIP**.
-Unzip it. You should have a folder containing:
+Either:
+
+- **Download ZIP:** on [github.com/Zdoink/heating_elements](https://github.com/Zdoink/heating_elements),
+  click the green **Code** button, then **Download ZIP**, and unzip it.
+- **Or clone it with Git:**
+  ```
+  git clone https://github.com/Zdoink/heating_elements.git
+  ```
+
+You should have a folder containing:
 
 ```
 heater_controller/
@@ -291,7 +301,7 @@ lowered to about 2000 for even steadier control.
 ## Project structure
 
 ```
-arduino_heating_elements/
+heating_elements/
 ├── README.md
 ├── NEXTION.md                  Nextion screen build guide
 └── heater_controller/
