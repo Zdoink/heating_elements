@@ -86,6 +86,60 @@ IDLE --Start--> HEATING --within 5 °F of target--> HOLDING --time up--> DONE
   cuts power to the heater relays or contactor directly. Then it works even if
   the Arduino doesn't.
 
+## Using an ESP32 instead of the Uno
+
+`heater_controller_esp32/heater_controller_esp32.ino` does exactly the same
+job on an ESP32 dev board: the same control logic, safety shutoffs and Nextion
+screen. The Nextion project in [NEXTION.md](NEXTION.md) works unchanged with it.
+
+> ⚠️ **The ESP32 is a 3.3 V board.** Its pins must never receive 5 V.
+> Power the thermocouple board from **3V3**, not 5V. Otherwise its data line
+> sends 5 V into the ESP32.
+
+### ESP32 wiring
+
+| From | To (ESP32 GPIO) |
+|---|---|
+| Thermocouple board VCC | **3V3** |
+| Thermocouple board GND | GND |
+| Thermocouple board SCK / CLK | GPIO18 |
+| Thermocouple board SO / DO | GPIO19 |
+| Thermocouple board CS | GPIO23 |
+| Relay 1 – 6 inputs | GPIO25, 26, 27, 32, 33, 4 |
+| Nextion TX (blue) | GPIO16 |
+| Nextion RX (yellow) | GPIO17 |
+| Nextion GND / 5V | GND / separate 5 V supply |
+| E-stop NC contact | Between GPIO13 and GND (jumper them if no E-stop yet) |
+
+**Pin choice:** these pins avoid the ESP32's boot-sensitive pins
+(GPIO 0, 2, 5, 12, 15), so no heater flicks on at power-up.
+
+### Relays must work from 3.3 V
+
+A 5 V relay module that turns on with a LOW input may not fully turn **off**
+from the ESP32's 3.3 V "high", which could leave a heater on. Use one of these:
+- **Solid-state relays with a 3–32 V DC input:** recommended. Set `RELAY_ACTIVE_LOW = false`.
+- **An optocoupler relay module with a JD-VCC jumper:** remove the jumper, power
+  VCC from 3V3 and JD-VCC from 5V.
+- **A relay module sold as 3.3 V compatible.**
+
+Check them with `relay_test.ino` (it uses the ESP32 pins automatically)
+before connecting any heaters.
+
+### ESP32 software setup
+
+1. In the Arduino IDE, open **Tools → Board → Boards Manager**, search for
+   **esp32** and install **esp32 by Espressif Systems**.
+2. Select **Tools → Board → esp32 → ESP32 Dev Module** (or your exact board).
+3. Install the thermocouple library as in step 3 below. **AltSoftSerial is not
+   needed** on the ESP32.
+4. Open `heater_controller_esp32/heater_controller_esp32.ino`, set `USE_MAX31855`,
+   and upload. If the upload stalls at "Connecting...", hold the board's
+   **BOOT** button until it starts.
+
+**Board versions:** the pins above are for the classic ESP32 (ESP32-WROOM /
+ESP32 Dev Module). ESP32-S2, S3 and C3 boards have different pin layouts.
+
 ## Uploading the code to the Arduino
 
 > **Do this with the heaters unplugged.** Only the Arduino, thermocouple board,
@@ -340,9 +394,11 @@ heating_elements/
 ├── images/
 │   └── nextion_layout.svg      Screen layout picture used in NEXTION.md
 ├── heater_controller/
-│   └── heater_controller.ino   Arduino sketch
+│   └── heater_controller.ino   Arduino Uno sketch
+├── heater_controller_esp32/
+│   └── heater_controller_esp32.ino   Same controller for an ESP32
 └── relay_test/
-    └── relay_test.ino          Relay wiring test: all relays on/off every 1.5 s
+    └── relay_test.ino          Relay wiring test (Uno or ESP32): all relays on/off every 1.5 s
 ```
 
 To check relay wiring before using the main sketch, upload `relay_test.ino`
