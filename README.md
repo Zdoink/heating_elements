@@ -304,9 +304,15 @@ lowered to about 2000 for even steadier control.
 heating_elements/
 ├── README.md
 ├── NEXTION.md                  Nextion screen build guide
-└── heater_controller/
-    └── heater_controller.ino   Arduino sketch
+├── heater_controller/
+│   └── heater_controller.ino   Arduino sketch
+└── relay_test/
+    └── relay_test.ino          Relay wiring test: all relays on/off every 1.5 s
 ```
+
+To check relay wiring before using the main sketch, upload `relay_test.ino`
+with the heaters unplugged. The relays should click on and off every 1.5
+seconds, matching the ON/OFF messages in the Serial Monitor.
 
 ## Roadmap
 
