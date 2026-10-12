@@ -337,6 +337,8 @@ lowered to about 2000 for even steadier control.
 heating_elements/
 ├── README.md
 ├── NEXTION.md                  Nextion screen build guide
+├── images/
+│   └── nextion_layout.svg      Screen layout picture used in NEXTION.md
 ├── heater_controller/
 │   └── heater_controller.ino   Arduino sketch
 └── relay_test/

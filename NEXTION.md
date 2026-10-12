@@ -21,13 +21,56 @@ displays what the Arduino reports back.
 ## 1. Create the project
 
 1. **File → New**, pick your screen's exact model (printed on the back, e.g. NX4832T035) and orientation.
-2. Add a font: **Tools → Font Generator**, height 24 or larger, then **Generate font** and add it to the project.
+2. Add fonts: **Tools → Font Generator**, then **Generate font** and add each to the project. See **Fonts** under the screen layout below for the three sizes to make.
 3. Baud rate stays at the default **9600** (matches the Arduino).
 
 ## 2. Add the components to page0
 
 Names must match **exactly** (they are case-sensitive), because the Arduino
 writes to them by name.
+
+### Screen layout
+
+![Nextion screen layout: current temperature, time left and power at the top; target temperature and hold time with - and + buttons in the middle; fault message bar; Start and Stop buttons at the bottom](images/nextion_layout.svg)
+
+The yellow labels show each component's name. The layout is for a
+**480 × 320** screen (most 3.5" models, e.g. NX4832T035). Only the names have
+to match; you can move, resize and recolor anything.
+
+**Positions:** in Nextion Editor, select a component and type these into its
+`x`, `y`, `w` and `h` attributes.
+
+| Component | Type | x | y | w | h | Notes |
+|---|---|---|---|---|---|---|
+| *(title "HEATER CONTROL")* | Text | 10 | 4 | 280 | 28 | Static label, any name |
+| `tStatus` | Text | 300 | 4 | 170 | 28 | |
+| *(label "CURRENT °F")* | Text | 10 | 40 | 225 | 18 | Static label |
+| `tTemp` | Text | 10 | 60 | 225 | 80 | Largest font |
+| *(label "TIME LEFT")* | Text | 245 | 40 | 140 | 18 | Static label |
+| `tLeft` | Text | 245 | 60 | 140 | 80 | |
+| *(label "POWER")* | Text | 395 | 40 | 75 | 18 | Static label |
+| `tOut` | Text | 395 | 60 | 75 | 80 | |
+| *(label "TARGET °F")* | Text | 10 | 146 | 225 | 18 | Static label |
+| `bTempDn` | Button | 10 | 166 | 55 | 60 | Text: `-` |
+| `nTemp` | Number | 70 | 166 | 105 | 60 | |
+| `bTempUp` | Button | 180 | 166 | 55 | 60 | Text: `+` |
+| *(label "HOLD TIME (MIN)")* | Text | 245 | 146 | 225 | 18 | Static label |
+| `bMinDn` | Button | 245 | 166 | 55 | 60 | Text: `-` |
+| `nMin` | Number | 305 | 166 | 105 | 60 | |
+| `bMinUp` | Button | 415 | 166 | 55 | 60 | Text: `+` |
+| `tMsg` | Text | 10 | 232 | 460 | 28 | Red text (`pco` = 63488) |
+| `bStart` | Button | 10 | 266 | 225 | 48 | Green background (`bco` = 1024) |
+| `bStop` | Button | 245 | 266 | 225 | 48 | Red background (`bco` = 63488) |
+
+**Other screen sizes:** scale every number in proportion. For example, on an
+800 × 480 screen (7"), multiply x and w by 800 ÷ 480 = 1.67, and y and h by
+480 ÷ 320 = 1.5.
+
+**Fonts:** generate three in **Tools → Font Generator**, then set each
+component's `font` attribute:
+- **small** (16 px): labels and `tMsg`;
+- **medium** (24–32 px): numbers and buttons;
+- **large** (48 px+, digits only is fine): `tTemp`.
 
 ### Display boxes (Text)
 
