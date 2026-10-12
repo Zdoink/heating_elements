@@ -13,7 +13,8 @@ displays what the Arduino reports back.
 |---|---|---|
 | Screen → Arduino | `<S500,29500>` setpoint, `<M90,29910>` minutes, `<GO>` start, `<X>` stop | Each frame starts with `<` and ends with `>`. Numbers carry a check value (value + check = 30000). The Arduino drops any frame that is damaged or doesn't add up. |
 | Arduino → screen | Temperature, status, time left and power every second, plus `aSet`, `aMin`, `aState` | The screen resends a request every 0.5 s until the Arduino reports the new value back, so a lost or rejected frame is simply sent again. |
-| Link check | Arduino sets `link` to 0 every second; the screen counts it up | If nothing arrives for about 3 seconds, the screen shows **NO LINK**. |
+| Link check (screen side) | Arduino sets `link` to 0 every second; the screen counts it up | If nothing arrives for about 3 seconds, the screen shows **NO LINK**. |
+| Link check (Arduino side) | Screen sends a heartbeat `<H>` every 0.5 s | If nothing valid arrives from the screen for 5 seconds **during a run**, the Arduino latches all heaters off (FAULT: screen link lost). |
 
 `aState` values: `0` IDLE, `1` HEATING, `2` HOLDING, `3` DONE, `4` FAULT.
 
@@ -36,6 +37,7 @@ writes to them by name.
 | `tStatus` | IDLE / HEATING / HOLDING / DONE / FAULT / NO LINK | 10 |
 | `tLeft` | Hold time left, e.g. `1:23:45` | 10 |
 | `tOut` | Heater power, e.g. `42%` | 6 |
+| `tMsg` | Fault reason, e.g. `E-stop pressed or E-stop wire broken` (blank when there's no fault). Make it wide, or use a small font. | 60 |
 
 Add plain labels next to them ("Temp °F", "Status", "Time left", "Power") as you like.
 
@@ -146,6 +148,8 @@ This runs every 0.5 s. It resends anything the Arduino hasn't confirmed yet,
 and shows the Arduino's values whenever you aren't editing them.
 
 ```
+// ---- heartbeat: tells the Arduino the screen is still connected ----
+prints "<H>",0
 // ---- link check: the Arduino resets link to 0 every second ----
 link.val+=1
 if(link.val>6)
@@ -246,5 +250,11 @@ run is already going (the timer is not restarted), and Stop when nothing is runn
    "Rejected screen frame" lines.
 4. Press **Start**: status changes to **HEATING** and the relays click.
 5. Press **Stop**: status returns to **IDLE** and all relays turn off.
-6. Unplug the screen's blue (TX) wire for a moment: nothing changes on the
-   Arduino. Unplug the Arduino instead: the screen shows **NO LINK** within a few seconds.
+6. **Link loss during a run:** press Start, then unplug the screen's blue (TX)
+   wire. Within 5 seconds the relays turn off, and the Serial Monitor shows
+   `FAULT: screen link lost`. Reset the Arduino to clear it.
+7. **Link loss, Arduino side:** unplug the Arduino's TX wire (D9) instead.
+   The screen shows **NO LINK** within a few seconds.
+8. **E-stop:** press Start, then press the E-stop. The relays turn off
+   immediately, and `tMsg` shows the E-stop message. Release the E-stop and
+   reset the Arduino to clear it.

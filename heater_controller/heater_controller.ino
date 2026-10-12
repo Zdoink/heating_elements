@@ -20,6 +20,9 @@
 //   Thermocouple board: VCC -> 5V, GND -> GND, SCK/CLK -> D13, SO/DO -> D12, CS -> D10
 //   Relays: heater 1..6 relay inputs -> D2..D7
 //   Nextion: TX (blue) -> D8, RX (yellow) -> D9, GND -> GND, 5V from its own supply
+//   E-stop: normally-closed (NC) contact between A0 and GND.
+//           No E-stop fitted yet? Put a wire jumper from A0 to GND, or the
+//           controller will stay in FAULT.
 //
 // USB Serial Monitor / Serial Plotter at 9600 baud. Commands (type then Enter):
 //   S500  setpoint F     M90  hold time in minutes     G  start     X  stop
@@ -162,6 +165,28 @@ const uint8_t MAX_BAD_READS = 4;     // consecutive sensor faults (~1 s) before 
 const unsigned long RUNAWAY_TIME_MS = 10UL * 60UL * 1000UL;  // 10 minutes
 const float RUNAWAY_MIN_RISE_F = 15.0;
 
+// Overshoot: during a run, shut off if the temperature gets this far ABOVE the
+// setpoint (e.g. setpoint 500 F -> fault at 520 F). MAX_SAFE_F above is still
+// the absolute limit whatever the setpoint is.
+const float OVERSHOOT_LIMIT_F = 20.0;
+
+// E-stop button on A0, wired as a normally-closed (NC) contact to GND.
+// Normal: contact closed, A0 reads LOW. Pressed OR wire broken: contact open,
+// the internal pull-up makes A0 read HIGH -> heaters latched off.
+// Using NC means a cut or loose wire also stops the heaters ("fail-safe").
+//
+// C++: A0 is a name the Arduino core defines for analog pin 0. Analog pins
+//      can also be used as ordinary digital inputs/outputs.
+const uint8_t PIN_ESTOP = A0;
+const unsigned long ESTOP_DEBOUNCE_MS = 20;  // must read "open" this long (filters electrical noise)
+
+// Screen link: the screen sends a heartbeat <H> every 0.5 s. During a run, if
+// nothing valid arrives from the screen for this long, the heaters are
+// latched off. Set REQUIRE_SCREEN_LINK to false only for bench testing over
+// USB without a screen connected.
+const bool REQUIRE_SCREEN_LINK = true;
+const unsigned long SCREEN_TIMEOUT_MS = 5000;
+
 // ---------------- Timing ----------------
 const unsigned long READ_INTERVAL_MS = 250;   // MAX6675 needs >= 220 ms between reads
 const unsigned long PID_INTERVAL_MS  = 1000;  // PID runs on the 1 s average of readings
@@ -199,6 +224,19 @@ uint8_t badReads = 0;      // consecutive failed thermocouple readings
 bool saturated = false;             // true while heaters are near full power
 unsigned long saturatedSinceMs = 0;
 float saturatedStartTempF = 0;
+
+// Overshoot check: only "armed" once the temperature is at or below the limit,
+// so lowering the setpoint mid-run (or starting while already hot) gives the
+// enclosure time to cool down instead of faulting straight away.
+bool overshootArmed = false;
+
+// E-stop tracking
+bool estopOpen = false;            // true while A0 reads HIGH (open)
+unsigned long estopOpenSinceMs = 0;
+
+// Screen link tracking
+bool screenSeen = false;           // has any valid frame arrived since power-up?
+unsigned long lastScreenMs = 0;    // millis() of the last valid frame
 
 // Timestamps for the jobs loop() does at different rates
 unsigned long lastReadMs = 0;
@@ -387,6 +425,58 @@ void checkRunaway(unsigned long now, float tempF) {
   }
 }
 
+// Shut off if the temperature climbs more than OVERSHOOT_LIMIT_F above the
+// setpoint during a run. Called once a second while running.
+void checkOvershoot(float tempF) {
+  float limit = setpointF + OVERSHOOT_LIMIT_F;
+  if (!overshootArmed) {
+    // Not armed yet: wait until we are at or below the limit, then start checking.
+    if (tempF <= limit) overshootArmed = true;
+    return;
+  }
+  if (tempF > limit) {
+    tripFault(F("temperature more than 20 F over setpoint"));
+  }
+}
+
+// Check the E-stop button. Called on every pass of loop(), so it reacts
+// within ESTOP_DEBOUNCE_MS (20 ms) of the button being pressed.
+void checkEstop(unsigned long now) {
+  // C++: digitalRead() returns HIGH or LOW. With INPUT_PULLUP (see setup),
+  //      an open contact reads HIGH and a contact closed to GND reads LOW.
+  if (digitalRead(PIN_ESTOP) == LOW) {
+    estopOpen = false;  // contact closed: all normal
+    return;
+  }
+  if (!estopOpen) {
+    // Just went open: note the time, and confirm it stays open (not noise).
+    estopOpen = true;
+    estopOpenSinceMs = now;
+  } else if (now - estopOpenSinceMs >= ESTOP_DEBOUNCE_MS) {
+    tripFault(F("E-stop pressed or E-stop wire broken"));
+  }
+}
+
+// C++: This function is small but gets its own name because it is used in
+//      two places (startRun and checkScreenLink). Naming a condition makes
+//      the code read like a sentence: if (!screenLinkOk(now)) ...
+bool screenLinkOk(unsigned long now) {
+  return screenSeen && now - lastScreenMs < SCREEN_TIMEOUT_MS;
+}
+
+// During a run, shut off if the screen has gone quiet.
+//
+// C++: This reads millis() fresh instead of using loop()'s "now". A frame
+//      handled earlier in this same pass may have stored a lastScreenMs a
+//      millisecond AFTER "now", and with unsigned numbers now - lastScreenMs
+//      would then wrap around to about 4.29 billion instead of -1, which
+//      looks like a lost link. Rule: only subtract an older time from a newer one.
+void checkScreenLink() {
+  if (REQUIRE_SCREEN_LINK && isRunning() && !screenLinkOk(millis())) {
+    tripFault(F("screen link lost"));
+  }
+}
+
 // Take one thermocouple reading and add it to this second's average.
 void readSensor() {
   // C++: Calling a MEMBER FUNCTION of the thermocouple object. The library
@@ -424,6 +514,9 @@ void readSensor() {
 // Returning a bool like this lets the caller know whether it worked.
 bool setSetpoint(float v) {
   if (v < MIN_SETPOINT_F || v > MAX_SAFE_F - 25) return false;
+  // Lowering the setpoint mid-run could leave the enclosure more than 20 F
+  // above the new target. Disarm the overshoot check until it cools down.
+  if (v < setpointF) overshootArmed = false;
   setpointF = v;
   return true;
 }
@@ -441,10 +534,16 @@ bool setDuration(long minutes) {
 // safely resend Start without restarting the timer. A fault blocks starting.
 void startRun() {
   if (state != IDLE && state != DONE) return;
+  // Don't start a run that would immediately fault for having no screen link.
+  if (REQUIRE_SCREEN_LINK && !screenLinkOk(millis())) {
+    Serial.println(F("Can't start: no link to the screen"));
+    return;
+  }
   // Reset the PID so leftovers from a previous run don't affect this one.
   integral = 0;
   lastTempF = NAN;
   saturated = false;
+  overshootArmed = false;  // arms itself once the temperature is below the limit
   state = HEATING;
   // Calculate a power level right away so heating starts immediately
   // instead of waiting up to a second for the next PID update.
@@ -452,6 +551,10 @@ void startRun() {
   //      would be fine, but e.g. 500 / 1000 with whole numbers gives 0, not 0.5.
   if (!isnan(currentTempF)) runPid(currentTempF, PID_INTERVAL_MS / 1000.0);
   windowStartMs = millis() - WINDOW_MS;  // start a fresh relay window now
+  // Clear the previous run's relay split so no relay follows stale values
+  // before the fresh window is calculated.
+  windowFullHeaters = 0;
+  windowPartialMs = 0;
   Serial.println(F("Run started"));
 }
 
@@ -586,17 +689,29 @@ void handleSerial() {
 //   <M90,29910>   set hold time   (value + check = 30000)
 //   <GO>          start
 //   <X>           stop
+//   <H>           heartbeat, every 0.5 s: "the screen is still connected"
 // Anything outside < > (Nextion startup/status bytes, noise) is ignored, and
 // a frame that is too long, has odd characters or a bad check is dropped.
+
+// Record that a valid frame just arrived, so the screen link counts as alive.
+void markScreenAlive() {
+  screenSeen = true;
+  lastScreenMs = millis();
+}
 
 // Check and act on one complete frame (the text between < and >).
 void handleFrame(char *f) {
   bool ok = false;
+  bool heartbeat = false;
 
   // C++: strcmp() compares two C strings and returns 0 when they are equal.
   //      (You can't compare C strings with ==; that would compare their
   //      memory addresses, not their text.)
-  if (strcmp(f, "GO") == 0) {
+  if (strcmp(f, "H") == 0) {
+    heartbeat = true;
+    ok = true;
+  } else if (strcmp(f, "GO") == 0) {
+    markScreenAlive();  // before startRun(), which checks the link
     startRun();
     ok = true;
   } else if (strcmp(f, "X") == 0) {
@@ -624,7 +739,10 @@ void handleFrame(char *f) {
   }
 
   if (ok) {
-    nexUpdateNow = true;  // echo the new values back right away
+    markScreenAlive();
+    // Echo changes back right away. Heartbeats change nothing, so skip them
+    // (otherwise the screen would be refreshed twice a second for no reason).
+    if (!heartbeat) nexUpdateNow = true;
   } else {
     badFrames++;
     Serial.print(F("Rejected screen frame: "));
@@ -722,6 +840,11 @@ void updateNextion(unsigned long now) {
   print2Digits(s % 60);
   nexTxtEnd();
 
+  // Why it faulted (blank otherwise), so the operator knows what happened
+  nexTxtBegin(F("tMsg"));
+  if (state == FAULT) nex.print(faultReason);
+  nexTxtEnd();
+
   nexTxtBegin(F("tOut"));
   // C++: A cast to int just drops the decimals (41.8 -> 41). Adding 0.5
   //      first ROUNDS to the nearest whole number instead (41.8 + 0.5 = 42.3 -> 42).
@@ -756,6 +879,11 @@ void setup() {
     writeRelay(i, false);
   }
 
+  // C++: INPUT_PULLUP turns on a resistor inside the chip that pulls the pin
+  //      up to 5 V. The pin reads HIGH unless something connects it to GND,
+  //      so no external resistor is needed for the E-stop.
+  pinMode(PIN_ESTOP, INPUT_PULLUP);
+
   Serial.begin(9600);   // USB serial to the computer
   nex.begin(NEX_BAUD);  // serial to the Nextion screen
   delay(500);  // let the thermocouple board and screen start up
@@ -784,9 +912,13 @@ void loop() {
   wdt_reset();  // feed the watchdog: "the program is still running fine"
   unsigned long now = millis();  // read the clock once and reuse it
 
+  // Every pass: E-stop first, so it is never delayed by anything else.
+  checkEstop(now);
+
   // Every pass: check for typed commands and screen commands.
   handleSerial();
   handleNextion();
+  checkScreenLink();
 
   // Every 250 ms: take a thermocouple reading.
   if (now - lastReadMs >= READ_INTERVAL_MS) {
@@ -805,6 +937,8 @@ void loop() {
       readingCount = 0;
 
       if (currentTempF >= MAX_SAFE_F) tripFault(F("over-temperature"));
+      if (isRunning()) checkOvershoot(currentTempF);
+      // Checked again: checkOvershoot() may have just faulted.
       if (isRunning()) {
         runPid(currentTempF, dtS);
         checkRunaway(now, currentTempF);

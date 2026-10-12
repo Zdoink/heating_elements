@@ -53,6 +53,7 @@ IDLE --Start--> HEATING --within 5 °F of target--> HOLDING --time up--> DONE
 | 6 heating elements | |
 | Nextion touch screen | Any Nextion model; see [NEXTION.md](NEXTION.md) |
 | 5 V power supply (≥1 A) | Powers the Nextion screen |
+| E-stop button | Mushroom-head, latching, with a **normally-closed (NC)** contact; ideally a second NC contact to cut heater power directly |
 | Thermal fuse / high-limit thermostat | Independent hardware backup cutoff |
 
 ## Wiring
@@ -70,6 +71,7 @@ IDLE --Start--> HEATING --within 5 °F of target--> HOLDING --time up--> DONE
 | Nextion RX (yellow) | D9 |
 | Nextion GND (black) | GND (and the 5 V supply's GND) |
 | Nextion 5V (red) | Separate 5 V supply, **not** the Uno's 5V pin |
+| E-stop NC contact | Between A0 and GND |
 
 - Thermocouple leads go into the amplifier board's screw terminal (yellow to +,
   red to −).
@@ -77,6 +79,12 @@ IDLE --Start--> HEATING --within 5 °F of target--> HOLDING --time up--> DONE
   coils is recommended because 6 coils draw a lot of current.
 - The Nextion must share a ground with the Uno or the two can't communicate.
 - D8 and D9 are fixed by the AltSoftSerial library and can't be changed.
+- **E-stop:** use the button's **normally-closed** contact, so a pressed button
+  *or* a broken wire stops the heaters. No E-stop fitted yet? Put a wire jumper
+  from **A0 to GND**, or the controller will go straight to FAULT at power-up.
+- For a true emergency stop, also wire a second NC contact on the E-stop so it
+  cuts power to the heater relays or contactor directly. Then it works even if
+  the Arduino doesn't.
 
 ## Uploading the code to the Arduino
 
@@ -174,14 +182,22 @@ Build and load the screen file by following [NEXTION.md](NEXTION.md).
 | Random characters in the Serial Monitor | Baud rate is not set to 9600 |
 | Screen shows **NO LINK** | Check TX/RX aren't swapped (Nextion TX → D8), and that the screen and Uno share GND |
 | Serial Monitor shows `Rejected screen frame` | Check the `tm0` code in the Nextion project matches [NEXTION.md](NEXTION.md) |
+| `FAULT: E-stop pressed or E-stop wire broken` right at power-up | E-stop pressed, wired to its NO contact instead of NC, or not fitted: jumper A0 to GND |
+| `Can't start: no link to the screen` | Screen not connected or not sending the `<H>` heartbeat; check the `tm0` code. For USB-only testing see the first power-up check |
 
 ### First power-up check
 
-With the heaters unplugged, type `G` in the Serial Monitor (or press Start on
-the screen). All relays should click **ON**, because room temperature is far
-below the setpoint. Type `X` (or press Stop) and they should all click **OFF**.
-If it's the other way round, your relay module is active-HIGH: set
-`RELAY_ACTIVE_LOW = false`.
+With the heaters unplugged, the E-stop connected (or A0 jumpered to GND) and
+the screen connected, press **Start** on the screen. All relays should click
+**ON**, because room temperature is far below the setpoint. Press **Stop** and
+they should all click **OFF**. If it's the other way round, your relay module
+is active-HIGH: set `RELAY_ACTIVE_LOW = false`.
+
+**Testing without the screen:** a run can't start while there is no screen
+link (the Serial Monitor shows `Can't start: no link to the screen`). For bench
+testing over USB only, temporarily set `REQUIRE_SCREEN_LINK = false`, upload,
+and use `G` and `X` in the Serial Monitor. **Set it back to `true` before
+real use.**
 
 ## Using the screen
 
@@ -206,8 +222,9 @@ heater power. Settings can be changed during a run.
 - **Safe repeats:** a repeated Start doesn't restart the timer, and a repeated
   Stop does nothing extra.
 - **Self-correcting display:** the screen is fully refreshed every second.
-- **Link check:** the screen shows **NO LINK** if the Arduino stops sending
-  updates for about 3 seconds.
+- **Link check, both ways:** the screen shows **NO LINK** if the Arduino stops
+  sending updates for about 3 seconds. The screen sends a heartbeat every 0.5 s,
+  and if it goes quiet for 5 seconds during a run, the Arduino shuts the heaters off.
 
 Full details are in [NEXTION.md](NEXTION.md).
 
@@ -220,7 +237,7 @@ Changes last until the board is reset; copy the values you settle on into the sk
 |---|---|---|
 | `S<temp>` | `S500` | Set the setpoint in °F |
 | `M<minutes>` | `M90` | Set the hold time in minutes |
-| `G` | `G` | Start a run |
+| `G` | `G` | Start a run (needs the screen connected unless `REQUIRE_SCREEN_LINK = false`) |
 | `X` | `X` | Stop: all heaters off |
 | `P<value>` | `P3.0` | Set Kp |
 | `I<value>` | `I0.02` | Set Ki |
@@ -241,6 +258,10 @@ the Serial Plotter to watch the temperature.
    `D` (start around 5–20).
 4. Put the final values into `Kp`, `Ki` and `Kd` in the sketch.
 
+While tuning, any overshoot of more than 20 °F above the setpoint trips the
+overshoot fault and shuts the heaters off. That's expected. Reset, lower `P`
+or `I`, and try again. A well-tuned enclosure should stay well under 20 °F.
+
 ## Configuration
 
 | Constant | Default | Meaning |
@@ -259,6 +280,11 @@ the Serial Plotter to watch the temperature.
 | `MAX_SAFE_F` | 560.0 | Over-temperature cutoff (°F) |
 | `MAX_BAD_READS` | 4 | Consecutive sensor faults before shutdown |
 | `RUNAWAY_TIME_MS` / `RUNAWAY_MIN_RISE_F` | 10 min / 15 °F | Thermal runaway detection |
+| `OVERSHOOT_LIMIT_F` | 20.0 | Fault if the temperature goes this far above the setpoint during a run |
+| `PIN_ESTOP` | A0 | E-stop input (NC contact to GND) |
+| `ESTOP_DEBOUNCE_MS` | 20 | E-stop must read open this long before tripping (filters noise) |
+| `REQUIRE_SCREEN_LINK` | true | Shut off if the screen link is lost during a run; `false` only for USB bench testing |
+| `SCREEN_TIMEOUT_MS` | 5000 | How long without a screen heartbeat before shutting off |
 
 ## Safety features
 
@@ -269,7 +295,14 @@ the Serial Plotter to watch the temperature.
 
 These faults **latch every heater off** and show **FAULT** until the board is reset:
 
-- **Over-temperature:** the temperature reaches `MAX_SAFE_F`.
+- **E-stop:** the E-stop button is pressed, or its wire is broken. This is
+  checked on every pass of the program and reacts within about 20 ms.
+- **Overshoot:** during a run, the temperature goes more than 20 °F above the
+  setpoint (e.g. 520 °F with a 500 °F setpoint). If you lower the setpoint
+  mid-run, this check waits until the enclosure has cooled to within 20 °F
+  of the new setpoint before it applies.
+- **Screen link lost:** during a run, no heartbeat from the screen for 5 seconds.
+- **Over-temperature:** the temperature reaches `MAX_SAFE_F` (560 °F), whatever the setpoint.
 - **Sensor fault:** the thermocouple is open or shorted for about 1 second.
 - **Thermal runaway:** the heaters run near full power for 10 minutes without
   the temperature rising 15 °F. This usually means the thermocouple has come
