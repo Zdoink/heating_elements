@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 420" width="1040" height="840" font-family="Arial, Helvetica, sans-serif">
+  <title>No-code Nextion layout for the ESP32 heater controller (NX4827P043, 480 x 272)</title>
+
+  <rect x="0" y="0" width="520" height="420" fill="#f4f5f7"/>
+  <rect x="8" y="8" width="504" height="296" rx="10" fill="#111418"/>
+
+  <!-- Screen area: 480 x 272, origin at (20,20) -->
+  <g transform="translate(20,20)">
+    <rect x="0" y="0" width="480" height="272" fill="#1b1f24"/>
+
+    <!-- Title row -->
+    <text x="8" y="23" fill="#ffffff" font-size="17" font-weight="bold">HEATER CONTROL</text>
+    <rect x="232" y="3" width="24" height="26" rx="3" fill="#2b313a" stroke="#4a5361"/>
+    <text x="244" y="23" fill="#7ee2a8" font-size="16" font-weight="bold" text-anchor="middle">*</text>
+    <text x="260" y="27" fill="#f5c542" font-size="7" font-family="Consolas, monospace">tBeat</text>
+    <rect x="300" y="3" width="172" height="26" rx="3" fill="#2b313a" stroke="#4a5361"/>
+    <text x="386" y="22" fill="#7ee2a8" font-size="15" font-weight="bold" text-anchor="middle">HOLDING</text>
+    <text x="469" y="27" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">tStatus</text>
+
+    <!-- Readouts -->
+    <text x="8" y="47" fill="#9aa4b2" font-size="11">CURRENT °F</text>
+    <rect x="8" y="52" width="228" height="58" rx="3" fill="#2b313a" stroke="#4a5361"/>
+    <text x="122" y="95" fill="#ffffff" font-size="36" font-weight="bold" text-anchor="middle">499.6</text>
+    <text x="233" y="107" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">tTemp</text>
+
+    <text x="246" y="47" fill="#9aa4b2" font-size="11">TIME LEFT</text>
+    <rect x="246" y="52" width="140" height="58" rx="3" fill="#2b313a" stroke="#4a5361"/>
+    <text x="316" y="89" fill="#ffffff" font-size="22" font-weight="bold" text-anchor="middle">1:23:45</text>
+    <text x="383" y="107" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">tLeft</text>
+
+    <text x="396" y="47" fill="#9aa4b2" font-size="11">POWER</text>
+    <rect x="396" y="52" width="76" height="58" rx="3" fill="#2b313a" stroke="#4a5361"/>
+    <text x="434" y="89" fill="#ffffff" font-size="22" font-weight="bold" text-anchor="middle">42%</text>
+    <text x="469" y="107" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">tOut</text>
+
+    <!-- Settings -->
+    <text x="8" y="127" fill="#9aa4b2" font-size="11">TARGET °F</text>
+    <rect x="8" y="132" width="52" height="52" rx="5" fill="#3d4a5c" stroke="#5c6b80"/>
+    <text x="34" y="167" fill="#ffffff" font-size="28" font-weight="bold" text-anchor="middle">−</text>
+    <text x="57" y="181" fill="#f5c542" font-size="6.5" font-family="Consolas, monospace" text-anchor="end">bTempDn·1</text>
+
+    <rect x="64" y="132" width="116" height="52" rx="3" fill="#2b313a" stroke="#4a5361"/>
+    <text x="122" y="168" fill="#ffffff" font-size="28" font-weight="bold" text-anchor="middle">500</text>
+    <text x="177" y="181" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">tSet</text>
+
+    <rect x="184" y="132" width="52" height="52" rx="5" fill="#3d4a5c" stroke="#5c6b80"/>
+    <text x="210" y="167" fill="#ffffff" font-size="28" font-weight="bold" text-anchor="middle">+</text>
+    <text x="233" y="181" fill="#f5c542" font-size="6.5" font-family="Consolas, monospace" text-anchor="end">bTempUp·2</text>
+
+    <text x="246" y="127" fill="#9aa4b2" font-size="11">HOLD TIME (MIN)</text>
+    <rect x="246" y="132" width="52" height="52" rx="5" fill="#3d4a5c" stroke="#5c6b80"/>
+    <text x="272" y="167" fill="#ffffff" font-size="28" font-weight="bold" text-anchor="middle">−</text>
+    <text x="295" y="181" fill="#f5c542" font-size="6.5" font-family="Consolas, monospace" text-anchor="end">bMinDn·3</text>
+
+    <rect x="302" y="132" width="114" height="52" rx="3" fill="#2b313a" stroke="#4a5361"/>
+    <text x="359" y="168" fill="#ffffff" font-size="28" font-weight="bold" text-anchor="middle">90</text>
+    <text x="413" y="181" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">tMin</text>
+
+    <rect x="420" y="132" width="52" height="52" rx="5" fill="#3d4a5c" stroke="#5c6b80"/>
+    <text x="446" y="167" fill="#ffffff" font-size="28" font-weight="bold" text-anchor="middle">+</text>
+    <text x="469" y="181" fill="#f5c542" font-size="6.5" font-family="Consolas, monospace" text-anchor="end">bMinUp·4</text>
+
+    <!-- Fault message -->
+    <rect x="8" y="190" width="464" height="24" rx="3" fill="#2b313a" stroke="#4a5361"/>
+    <text x="15" y="206" fill="#ff8a80" font-size="11.5">(fault reason appears here, e.g. E-stop pressed or E-stop wire broken)</text>
+    <text x="469" y="211" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">tMsg</text>
+
+    <!-- Start / Stop -->
+    <rect x="8" y="220" width="228" height="46" rx="5" fill="#1f8a4c" stroke="#2fb866"/>
+    <text x="122" y="251" fill="#ffffff" font-size="21" font-weight="bold" text-anchor="middle">START</text>
+    <text x="233" y="263" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">bStart·5</text>
+
+    <rect x="246" y="220" width="226" height="46" rx="5" fill="#c0392b" stroke="#e5604f"/>
+    <text x="359" y="251" fill="#ffffff" font-size="21" font-weight="bold" text-anchor="middle">STOP</text>
+    <text x="469" y="263" fill="#f5c542" font-size="7" font-family="Consolas, monospace" text-anchor="end">bStop·6</text>
+  </g>
+
+  <!-- Legend -->
+  <g font-size="11" fill="#333a44">
+    <text x="20" y="326" font-weight="bold" font-size="12">NX4827P043 · 480 × 272 · no code on the screen</text>
+    <text x="20" y="344">Yellow = component name. Buttons show name·id: add the 6 buttons FIRST, in id order 1–6.</text>
+    <rect x="20" y="354" width="12" height="12" fill="#2b313a"/><text x="38" y="364">Text box (ESP32 fills it in)</text>
+    <rect x="200" y="354" width="12" height="12" fill="#3d4a5c"/><text x="218" y="364">Button: tick "Send Component ID" (Touch Release)</text>
+    <text x="20" y="388">No variables, no timer, no event code. Plain labels (CURRENT °F etc.) are ordinary Text</text>
+    <text x="20" y="403">components added after the buttons; their names and ids don't matter.</text>
+  </g>
+</svg>

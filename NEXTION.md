@@ -1,5 +1,8 @@
 # Nextion Screen Setup
 
+> This guide is for the **Uno** sketch (`heater_controller.ino`). For the
+> ESP32 sketch, use the no-code screen in [NEXTION_ESP32.md](NEXTION_ESP32.md).
+
 How to build the touch screen for the heater controller in the free
 [Nextion Editor](https://nextion.tech/nextion-editor/). The screen lets you set
 the temperature and hold time, start and stop a run, and see the live status.

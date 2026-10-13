@@ -1,6 +1,7 @@
 // Heater enclosure controller - ESP32 version
-// (Same behaviour as heater_controller.ino for the Uno; only the pins, the
-//  screen's serial port and the watchdog are different.)
+// (Same heater control and safety as heater_controller.ino for the Uno. The
+//  differences are the pins, the watchdog, and the screen: this version uses
+//  a "no-code" Nextion screen, see NEXTION_ESP32.md.)
 //
 // Holds the enclosure at a set temperature for a set time using:
 //   - one Type K thermocouple read through a MAX31855 or MAX6675 board
@@ -8,7 +9,9 @@
 //   - 6 heating elements switched by relays, staged so that the PID output
 //     is spread across the elements (e.g. 50% power = 3 elements fully on)
 //     and only ONE relay ever cycles to make up the fractional part.
-//   - a Nextion touch screen to set the temperature and time, start and stop
+//   - a Nextion NX4827P043 (4.3", 480x272) touch screen to set the
+//     temperature and time, start and stop. The screen holds no code at all:
+//     it only reports which button was tapped, and the ESP32 does the rest.
 //
 // Run sequence: IDLE -> (Start) -> HEATING -> reaches temp -> HOLDING (timer
 // counts down) -> time up -> DONE. Heaters are only on in HEATING/HOLDING.
@@ -120,8 +123,31 @@ const long NEX_BAUD = 9600;                 // Nextion factory default
 //      milliseconds since power-up) returns unsigned long. Mixing types in
 //      comparisons can cause subtle bugs, so we match it.
 const unsigned long NEX_UPDATE_MS = 1000;   // refresh the screen once a second
-// Screen frames carry a check number: <S500,29500>  value + check must equal this
-const long FRAME_CHECK_TOTAL = 30000;
+
+// Button component IDs. Nextion Editor numbers components in the order they
+// are added to the page (the page itself is 0). NEXTION_ESP32.md says to add
+// the six buttons FIRST, in this order, so they get IDs 1-6. If yours differ,
+// check each button's "id" attribute in Nextion Editor and change these.
+const uint8_t ID_TEMP_DN = 1;  // bTempDn
+const uint8_t ID_TEMP_UP = 2;  // bTempUp
+const uint8_t ID_MIN_DN  = 3;  // bMinDn
+const uint8_t ID_MIN_UP  = 4;  // bMinUp
+const uint8_t ID_START   = 5;  // bStart
+const uint8_t ID_STOP    = 6;  // bStop
+
+// How much each tap of + / - changes the settings
+const float TEMP_STEP_F = 5.0;
+const unsigned int MIN_STEP_SHORT = 5;       // minutes per tap up to 2 hours...
+const unsigned int MIN_STEP_LONG  = 15;      // ...and above 2 hours
+const unsigned int MIN_STEP_SWITCH = 120;
+
+// Bytes the Nextion sends back, each followed by FF FF FF:
+//   65 page id event  - a button was touched (event 00 = released, 01 = pressed)
+//   66 page           - reply to our "sendme" ping: "I'm here, on this page"
+//   88                - the screen has just started up
+const uint8_t NEX_TOUCH = 0x65;
+const uint8_t NEX_PAGE  = 0x66;
+const uint8_t NEX_READY = 0x88;
 
 // ---------------- Heaters / relays ----------------
 const uint8_t NUM_HEATERS = 6;
@@ -213,9 +239,9 @@ const float OVERSHOOT_LIMIT_F = 20.0;
 const uint8_t PIN_ESTOP = 13;
 const unsigned long ESTOP_DEBOUNCE_MS = 20;  // must read "open" this long (filters electrical noise)
 
-// Screen link: the screen sends a heartbeat <H> every 0.5 s. During a run, if
-// nothing valid arrives from the screen for this long, the heaters are
-// latched off. Set REQUIRE_SCREEN_LINK to false only for bench testing over
+// Screen link: every second the ESP32 sends the screen "sendme", and the
+// screen automatically replies with its page number. During a run, if no
+// valid reply or touch arrives for this long, the heaters are latched off. Set REQUIRE_SCREEN_LINK to false only for bench testing over
 // USB without a screen connected.
 const bool REQUIRE_SCREEN_LINK = true;
 const unsigned long SCREEN_TIMEOUT_MS = 5000;
@@ -225,8 +251,6 @@ const unsigned long READ_INTERVAL_MS = 250;   // MAX6675 needs >= 220 ms between
 const unsigned long PID_INTERVAL_MS  = 1000;  // PID runs on the 1 s average of readings
 
 // ---------------- State ----------------
-// Numbers are sent to the screen as aState, keep in sync with NEXTION.md
-//
 // C++: An ENUM ("enumeration") gives names to a set of related numbers, so the
 //      code can say HEATING instead of a mystery 1. ": uint8_t" tells the
 //      compiler to store it in 1 byte. RunState becomes a new TYPE, and the
@@ -286,11 +310,14 @@ unsigned long windowPartialMs = 0; // how long the one cycling heater is on
 char cmdBuf[16];     // USB command being typed, e.g. "S500"
 uint8_t cmdLen = 0;  // how many characters are in it so far
 
-char frameBuf[16];   // screen frame being received, e.g. "S500,29500"
-uint8_t frameLen = 0;
-bool inFrame = false;       // true between a '<' and a '>'
+// C++: uint8_t arrays are handy for raw bytes (numbers 0-255) rather than text.
+uint8_t nexBuf[8];          // bytes of the message being received from the screen
+uint8_t nexLen = 0;
+uint8_t nexFFCount = 0;     // how many FF bytes in a row we've just seen
+bool nexBad = false;        // true if the current message got garbled
 bool nexUpdateNow = false;  // set true to refresh the screen immediately
-unsigned int badFrames = 0; // count of rejected screen frames, for debugging
+bool beatOn = false;        // the blinking "alive" dot on the screen
+unsigned int badFrames = 0; // count of unrecognised screen messages, for debugging
 
 // ---------------------------------------------------------------
 
@@ -717,102 +744,6 @@ void handleSerial() {
   }
 }
 
-// ---------------- Nextion: receiving ----------------
-// Frames from the screen:
-//   <S500,29500>  set setpoint    (value + check = 30000)
-//   <M90,29910>   set hold time   (value + check = 30000)
-//   <GO>          start
-//   <X>           stop
-//   <H>           heartbeat, every 0.5 s: "the screen is still connected"
-// Anything outside < > (Nextion startup/status bytes, noise) is ignored, and
-// a frame that is too long, has odd characters or a bad check is dropped.
-
-// Record that a valid frame just arrived, so the screen link counts as alive.
-void markScreenAlive() {
-  screenSeen = true;
-  lastScreenMs = millis();
-}
-
-// Check and act on one complete frame (the text between < and >).
-void handleFrame(char *f) {
-  bool ok = false;
-  bool heartbeat = false;
-
-  // C++: strcmp() compares two C strings and returns 0 when they are equal.
-  //      (You can't compare C strings with ==; that would compare their
-  //      memory addresses, not their text.)
-  if (strcmp(f, "H") == 0) {
-    heartbeat = true;
-    ok = true;
-  } else if (strcmp(f, "GO") == 0) {
-    markScreenAlive();  // before startRun(), which checks the link
-    startRun();
-    ok = true;
-  } else if (strcmp(f, "X") == 0) {
-    stopRun();
-    ok = true;
-  } else if (f[0] == 'S' || f[0] == 'M') {
-    // C++: strtol() ("string to long") reads a whole number from text. Its
-    //      second argument, &end, is the ADDRESS of our pointer "end", so
-    //      strtol can set it to point at the first character it did NOT
-    //      read. That tells us exactly where the number stopped.
-    //      Example: f = "S500,29500" -> value = 500, end points at ','
-    char *end;
-    long value = strtol(f + 1, &end, 10);  // 10 = base 10 (normal decimal)
-    // C++: *end DEREFERENCES the pointer: it gives the character it points at.
-    //      end != f + 1 checks that at least one digit was actually read.
-    if (end != f + 1 && *end == ',') {
-      char *checkStart = end + 1;  // the character after the comma
-      long check = strtol(checkStart, &end, 10);
-      // Accept only if: digits were read, nothing extra follows them
-      // (*end == '\0' is the end of the string), and the check adds up.
-      if (end != checkStart && *end == '\0' && value + check == FRAME_CHECK_TOTAL) {
-        ok = (f[0] == 'S') ? setSetpoint(value) : setDuration(value);
-      }
-    }
-  }
-
-  if (ok) {
-    markScreenAlive();
-    // Echo changes back right away. Heartbeats change nothing, so skip them
-    // (otherwise the screen would be refreshed twice a second for no reason).
-    if (!heartbeat) nexUpdateNow = true;
-  } else {
-    badFrames++;
-    Serial.print(F("Rejected screen frame: "));
-    Serial.println(f);
-  }
-}
-
-// Read bytes from the screen and assemble them into frames.
-// This is a small "state machine": inFrame remembers whether we are currently
-// between a '<' and a '>', and each byte is handled based on that.
-void handleNextion() {
-  while (nex.available()) {
-    char c = nex.read();
-    if (c == '<') {
-      // Start of a new frame (also restarts if a previous frame was cut off).
-      inFrame = true;
-      frameLen = 0;
-    } else if (!inFrame) {
-      // ignore bytes between frames
-    } else if (c == '>') {
-      // End of the frame: terminate the string and process it.
-      inFrame = false;
-      frameBuf[frameLen] = '\0';
-      handleFrame(frameBuf);
-    // C++: Characters are stored as numbers (ASCII codes), so they can be
-    //      compared with < and >. ' ' (32) to '~' (126) are the normal
-    //      printable characters; anything else means the data is garbled.
-    } else if (frameLen < sizeof(frameBuf) - 1 && c >= ' ' && c <= '~') {
-      frameBuf[frameLen++] = c;
-    } else {
-      inFrame = false;  // overflow or garbage: drop this frame
-      badFrames++;
-    }
-  }
-}
-
 // ---------------- Nextion: sending ----------------
 // Every Nextion instruction ends with three 0xFF bytes. The screen is fully
 // refreshed every second, so a corrupted update is fixed on the next one.
@@ -826,9 +757,9 @@ void nexEnd() {
   nex.write(0xFF); nex.write(0xFF); nex.write(0xFF);
 }
 
-// Set a number on the screen, e.g. nexVal(F("aSet"), 500) sends  aSet.val=500
-void nexVal(const __FlashStringHelper *obj, long v) {
-  nex.print(obj); nex.print(F(".val=")); nex.print(v);
+// Send one complete instruction, e.g. nexSend(F("sendme"))
+void nexSend(const __FlashStringHelper *cmd) {
+  nex.print(cmd);
   nexEnd();
 }
 
@@ -852,7 +783,8 @@ void print2Digits(unsigned long v) {
 }
 
 // Send everything the screen displays. Called once a second, and right away
-// after any change.
+// after any change. The ESP32 is the only source of what the screen shows,
+// so the screen can never show a setting the ESP32 isn't actually using.
 void updateNextion(unsigned long now) {
   nexTxtBegin(F("tTemp"));
   // C++: if/else without { } braces controls only the single next statement.
@@ -885,12 +817,134 @@ void updateNextion(unsigned long now) {
   nex.print((int)(outputPct + 0.5)); nex.print('%');
   nexTxtEnd();
 
-  // Values the screen compares against to confirm its commands arrived
-  nexVal(F("aSet"), (long)(setpointF + 0.5));
-  nexVal(F("aMin"), durationMin);
-  // C++: An enum value converts automatically to its number (HOLDING -> 2).
-  nexVal(F("aState"), state);
-  nexVal(F("link"), 0);  // screen shows NO LINK if this isn't reset
+  // The settings, shown between the - and + buttons
+  nexTxtBegin(F("tSet"));
+  nex.print((long)(setpointF + 0.5));
+  nexTxtEnd();
+
+  nexTxtBegin(F("tMin"));
+  nex.print(durationMin);
+  nexTxtEnd();
+
+  // Blinking dot: it changes on every update, so if the ESP32 ever stops
+  // talking to the screen, the dot freezes and you can see the link is down.
+  // C++: ! flips a bool: true becomes false, false becomes true.
+  beatOn = !beatOn;
+  nexTxtBegin(F("tBeat"));
+  if (beatOn) nex.print('*');
+  nexTxtEnd();
+
+  // Ping. The screen answers 66 <page> FF FF FF all by itself, which tells
+  // us the link is working (see handleNexMessage).
+  nexSend(F("sendme"));
+}
+
+// ---------------- Nextion: receiving ----------------
+// The screen has no code of its own. It only sends these built-in messages,
+// each ending with three FF bytes:
+//   65 00 05 00 FF FF FF  - on page 0, the button with id 5 (Start) was released
+//   66 00 FF FF FF        - reply to our "sendme" ping: "I'm on page 0"
+//   88 FF FF FF           - the screen has just powered up
+// A message is only accepted if it has exactly the right length and type, so
+// a garbled message is dropped instead of being misread as a button tap.
+
+// Record that a valid message just arrived, so the screen link counts as alive.
+void markScreenAlive() {
+  screenSeen = true;
+  lastScreenMs = millis();
+}
+
+// Change the hold time by one tap: 5-minute steps up to 2 hours, 15 above.
+void stepDuration(bool up) {
+  long m = durationMin;
+  if (up) {
+    m += (m >= MIN_STEP_SWITCH) ? MIN_STEP_LONG : MIN_STEP_SHORT;
+  } else {
+    m -= (m > MIN_STEP_SWITCH) ? MIN_STEP_LONG : MIN_STEP_SHORT;
+  }
+  // C++: constrain() keeps the result inside the allowed range, so tapping
+  //      past either end just stops there. The (long) casts make all three
+  //      values the same type.
+  setDuration(constrain(m, (long)MIN_STEP_SHORT, (long)MAX_DURATION_MIN));
+}
+
+// A button was tapped. "id" is the button's component id (see ID_... above).
+void handleTouch(uint8_t id) {
+  // C++: case labels can be named constants, as long as they are "const"
+  //      values the compiler knows in advance.
+  switch (id) {
+    case ID_TEMP_DN:
+      setSetpoint(constrain(setpointF - TEMP_STEP_F, MIN_SETPOINT_F, MAX_SAFE_F - 25));
+      break;
+    case ID_TEMP_UP:
+      setSetpoint(constrain(setpointF + TEMP_STEP_F, MIN_SETPOINT_F, MAX_SAFE_F - 25));
+      break;
+    case ID_MIN_DN: stepDuration(false); break;
+    case ID_MIN_UP: stepDuration(true);  break;
+    case ID_START:  startRun(); break;
+    case ID_STOP:   stopRun();  break;
+    default:
+      // A component we don't know. Usually means the IDs don't match the
+      // ID_... constants: check each button's "id" in Nextion Editor.
+      Serial.print(F("Touch from unknown component id "));
+      Serial.println(id);
+      return;
+  }
+  nexUpdateNow = true;  // show the result on the screen straight away
+}
+
+// Act on one complete message (the bytes before the FF FF FF).
+// C++: "const uint8_t *msg" is a pointer to bytes this function promises not
+//      to change (const). The length is passed separately, because raw bytes
+//      have no '\0' marking the end like text does.
+void handleNexMessage(const uint8_t *msg, uint8_t len) {
+  if (len == 4 && msg[0] == NEX_TOUCH) {
+    markScreenAlive();  // before handleTouch(): Start checks the link
+    // msg[1] = page, msg[2] = component id, msg[3] = 00 released / 01 pressed
+    if (msg[3] == 0x00) {
+      handleTouch(msg[2]);
+    } else {
+      Serial.println(F("Touch PRESS ignored: tick 'Send Component ID' under "
+                       "Touch Release Event only"));
+    }
+  } else if (len == 2 && msg[0] == NEX_PAGE) {
+    markScreenAlive();  // the reply to our "sendme" ping
+  } else if (len == 1 && msg[0] == NEX_READY) {
+    // The screen has just started (or restarted): set it up, then redraw.
+    nexSend(F("bkcmd=0"));
+    nexUpdateNow = true;
+  } else {
+    badFrames++;  // a message we don't use, or a garbled one: ignore it
+  }
+}
+
+// Read bytes from the screen and split them into messages at each FF FF FF.
+void handleNextion() {
+  while (nex.available()) {
+    uint8_t b = nex.read();
+
+    if (b == 0xFF) {
+      nexFFCount++;
+      if (nexFFCount == 3) {
+        // End marker reached: use the message, unless it was damaged.
+        if (nexBad) badFrames++;
+        else if (nexLen > 0) handleNexMessage(nexBuf, nexLen);
+        nexLen = 0;
+        nexFFCount = 0;
+        nexBad = false;
+      }
+      // C++: "continue" skips the rest of this pass of the while loop and
+      //      goes straight on to the next byte.
+      continue;
+    }
+
+    // A normal (non-FF) byte. None of the messages we use contain FF as data,
+    // so one or two FFs followed by something else means bytes were lost.
+    // Too many bytes for any message we use also means it's garbled.
+    if (nexFFCount > 0 || nexLen >= sizeof(nexBuf)) nexBad = true;
+    nexFFCount = 0;
+    if (!nexBad) nexBuf[nexLen++] = b;
+  }
 }
 
 // ---------------------------------------------------------------

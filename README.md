@@ -88,9 +88,14 @@ IDLE --Start--> HEATING --within 5 °F of target--> HOLDING --time up--> DONE
 
 ## Using an ESP32 instead of the Uno
 
-`heater_controller_esp32/heater_controller_esp32.ino` does exactly the same
-job on an ESP32 dev board: the same control logic, safety shutoffs and Nextion
-screen. The Nextion project in [NEXTION.md](NEXTION.md) works unchanged with it.
+`heater_controller_esp32/heater_controller_esp32.ino` does the same job on an
+ESP32 dev board, with the same control logic and safety shutoffs.
+
+It uses a **no-code Nextion screen** (built for the NX4827P043, 4.3"
+480 × 272). On the screen you only place and name the items and tick
+"Send Component ID" on each button; the ESP32 handles all the button logic.
+See [NEXTION_ESP32.md](NEXTION_ESP32.md). (The Uno uses the screen design in
+[NEXTION.md](NEXTION.md) instead; the two designs are not interchangeable.)
 
 > ⚠️ **The ESP32 is a 3.3 V board.** Its pins must never receive 5 V.
 > Power the thermocouple board from **3V3**, not 5V. Otherwise its data line
@@ -390,9 +395,11 @@ lowered to about 2000 for even steadier control.
 ```
 heating_elements/
 ├── README.md
-├── NEXTION.md                  Nextion screen build guide
+├── NEXTION.md                  Nextion screen build guide (Uno, 480 × 320)
+├── NEXTION_ESP32.md            No-code Nextion screen guide (ESP32, NX4827P043 480 × 272)
 ├── images/
-│   └── nextion_layout.svg      Screen layout picture used in NEXTION.md
+│   ├── nextion_layout.svg      Screen layout picture used in NEXTION.md
+│   └── nextion_esp32_layout.svg  Screen layout picture used in NEXTION_ESP32.md
 ├── heater_controller/
 │   └── heater_controller.ino   Arduino Uno sketch
 ├── heater_controller_esp32/
