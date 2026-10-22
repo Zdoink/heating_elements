@@ -1,7 +1,7 @@
-// Heater enclosure controller - ESP32 version
-// (Same heater control and safety as heater_controller.ino for the Uno. The
-//  differences are the pins, the watchdog, and the screen: this version uses
-//  a "no-code" Nextion screen, see NEXTION_ESP32.md.)
+// Heater enclosure controller - ESP32
+// (This project started on an Arduino Uno and was moved to the ESP32. Some
+//  comments compare the two chips, to help explain how the ESP32 works.
+//  The screen is a "no-code" Nextion screen, see NEXTION_ESP32.md.)
 //
 // Holds the enclosure at a set temperature for a set time using:
 //   - one Type K thermocouple read through a MAX31855 or MAX6675 board
@@ -46,6 +46,8 @@
 //   Plain comments explain what the code does for the heater.
 //   Comments starting with "C++:" explain the language feature being used,
 //   so you can learn C++ as you read.
+//   Comments starting with "ESP32:" explain something specific to the ESP32
+//   chip, and how it differs from the Arduino Uno.
 //
 // C++: Anything after // to the end of the line is a comment. The compiler
 //      ignores it completely, so comments never change what the program does.
@@ -53,6 +55,19 @@
 // C++: An Arduino sketch is C++. Behind the scenes the Arduino core supplies a
 //      main() function that calls setup() once, then calls loop() over and
 //      over forever. Those two functions are at the bottom of this file.
+//
+// ESP32: The ESP32 is a much bigger chip than the Uno's ATmega328P:
+//          Uno:   1 core,  16 MHz,   2 KB RAM,  32 KB program space, 5 V pins
+//          ESP32: 2 cores, 240 MHz, 520 KB RAM, 4 MB program space,  3.3 V pins
+//        It also runs a small operating system called FreeRTOS, which lets
+//        several "tasks" share the processor (Wi-Fi uses one, for example).
+//        The Arduino core runs your setup() and loop() inside one of those
+//        tasks, called "loopTask". You write the sketch the same way as on
+//        the Uno, but a few things (like the watchdog) work per task.
+//
+// TIP: Read loop() at the bottom first to see the overall flow, then follow
+//      the functions it calls. The screen code is in the sections named
+//      "Nextion: sending" and "Nextion: receiving".
 // ============================================================================
 
 // C++: #include copies another file (a "header") into this one before
@@ -333,9 +348,9 @@ bool isRunning() {
 
 // C++: F("text") marks text to be kept in flash memory instead of RAM. On the
 //      Uno (2 KB of RAM) that matters a lot. The ESP32 has plenty of RAM and
-//      keeps constant text in flash anyway, so F() does nothing extra here, but
-//      it is kept so this file matches the Uno version. This function returns
-//      a pointer to one of those strings.
+//      keeps constant text in flash anyway, so F() does nothing extra here.
+//      It's kept because it's harmless and a good habit for smaller boards.
+//      This function returns a pointer to one of those strings.
 //
 // C++: switch picks a "case" that matches the value. Each case here returns
 //      immediately, so no "break" is needed (see runCommand for break).
@@ -856,6 +871,11 @@ void markScreenAlive() {
 
 // Change the hold time by one tap: 5-minute steps up to 2 hours, 15 above.
 void stepDuration(bool up) {
+  // C++: m is a "long" (SIGNED: it can be negative) even though durationMin
+  //      is UNSIGNED. If m were unsigned, 5 - 15 would not give -10: it would
+  //      wrap around to about 4.29 billion, and constrain() below would then
+  //      clamp that to the MAXIMUM (24 hours) instead of the minimum.
+  //      Doing the math in a signed type lets constrain() catch it properly.
   long m = durationMin;
   if (up) {
     m += (m >= MIN_STEP_SWITCH) ? MIN_STEP_LONG : MIN_STEP_SHORT;
@@ -872,6 +892,11 @@ void stepDuration(bool up) {
 void handleTouch(uint8_t id) {
   // C++: case labels can be named constants, as long as they are "const"
   //      values the compiler knows in advance.
+  //
+  // C++: setSetpoint() returns true/false (accepted or not), but here the
+  //      result isn't stored. C++ lets you ignore a return value. It's safe
+  //      because constrain() already keeps the value inside the allowed
+  //      range, so it will always be accepted.
   switch (id) {
     case ID_TEMP_DN:
       setSetpoint(constrain(setpointF - TEMP_STEP_F, MIN_SETPOINT_F, MAX_SAFE_F - 25));
@@ -904,6 +929,9 @@ void handleNexMessage(const uint8_t *msg, uint8_t len) {
     if (msg[3] == 0x00) {
       handleTouch(msg[2]);
     } else {
+      // C++: Two string literals written next to each other ("..." "...")
+      //      are joined into one by the compiler. It's a handy way to split
+      //      a long message over two lines without changing the text.
       Serial.println(F("Touch PRESS ignored: tick 'Send Component ID' under "
                        "Touch Release Event only"));
     }
@@ -919,8 +947,25 @@ void handleNexMessage(const uint8_t *msg, uint8_t len) {
 }
 
 // Read bytes from the screen and split them into messages at each FF FF FF.
+//
+// ESP32: The serial hardware (the "UART") receives bytes in the background
+//        into a buffer, even while the rest of loop() is busy. nex.available()
+//        says how many are waiting and nex.read() takes the oldest one. So
+//        this function never waits: it handles what has arrived and returns.
+//
+// This is a small "state machine": nexFFCount, nexLen and nexBad remember
+// where we are in the current message between bytes, and even between calls,
+// because they are global variables rather than local ones.
+//
+// Example: the bytes 65 00 05 00 FF FF FF arrive one at a time.
+//   65, 00, 05, 00 -> stored in nexBuf (nexLen becomes 4)
+//   FF, FF, FF     -> nexFFCount counts to 3, so the message is complete:
+//                     handleNexMessage(nexBuf, 4) runs, which sees a touch
+//                     on id 5 (Start). Then everything resets for the next one.
 void handleNextion() {
   while (nex.available()) {
+    // C++: read() returns an int (-1 if nothing is waiting), but we only
+    //      call it when a byte IS waiting, so storing it in a uint8_t is safe.
     uint8_t b = nex.read();
 
     if (b == 0xFF) {
@@ -973,9 +1018,17 @@ void setup() {
   pinMode(PIN_ESTOP, INPUT_PULLUP);
 
   Serial.begin(9600);   // USB serial to the computer
-  // Serial2 on the ESP32 can use almost any pins, so we pass them in:
-  // speed, data format (8 data bits, no parity, 1 stop bit), RX pin, TX pin.
+  // ESP32: The ESP32 has a "GPIO matrix" that can route a serial port to
+  //        almost any pin, so we tell Serial2 which pins to use. (On the Uno
+  //        every serial port is fixed to particular pins.)
+  // C++: begin() is called with 4 ARGUMENTS here but only 1 for Serial above.
+  //      HardwareSerial::begin() has DEFAULT ARGUMENTS: values used for any
+  //      parameter you leave out. Arguments, in order: speed (baud), data
+  //      format (SERIAL_8N1 = 8 data bits, No parity, 1 stop bit, the
+  //      standard), RX pin, TX pin.
   nex.begin(NEX_BAUD, SERIAL_8N1, PIN_NEX_RX, PIN_NEX_TX);
+  // delay() pauses for 500 ms. It's fine here because setup() runs once,
+  // before the heaters can be switched on. loop() never uses delay().
   delay(500);  // let the thermocouple board and screen start up
 #if USE_MAX31855
   if (!thermocouple.begin()) Serial.println(F("MAX31855 init failed"));
@@ -990,20 +1043,42 @@ void setup() {
   // it (esp_task_wdt_reset) within 3 seconds. If the code ever gets stuck,
   // the board restarts, and setup() turns all heaters off again.
   //
+  // ESP32: This is the "Task Watchdog Timer" (TWDT). Because the ESP32 runs
+  //        FreeRTOS tasks (see the top of the file), the watchdog watches
+  //        individual TASKS. Below we set it up, then add our own task to
+  //        its watch list.
+  //
   // C++: #if checks the ESP32 board package version at compile time, because
   //      the watchdog setup function changed in version 3. This way the
   //      sketch compiles on both older (2.x) and newer (3.x) versions.
+  //      defined(NAME) is true if NAME has been #define'd at all; checking it
+  //      first avoids comparing a name that doesn't exist on very old versions.
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  // C++: esp_task_wdt_config_t is a STRUCT: a type that groups several named
+  //      values (called "members" or "fields") into one variable, a bit like
+  //      one row of a table. Here the struct holds the watchdog's settings.
+  //      The { .name = value } style is called DESIGNATED INITIALIZERS: each
+  //      member is set by name, so it's clear which value is which. The
+  //      members must be listed in the same order the struct declares them.
   esp_task_wdt_config_t wdtConfig = {
     .timeout_ms = 3000,
     .idle_core_mask = 0,      // don't also watch the idle tasks
     .trigger_panic = true,    // restart the chip when it times out
   };
+  // C++: &wdtConfig is the ADDRESS of the struct (the "address-of" operator).
+  //      The function takes a pointer, so it reads our settings in place
+  //      instead of copying the whole struct. (Same symbol as a reference,
+  //      like "HardwareSerial &nex" above, but here it is used on a value,
+  //      which makes it mean "address of".)
   esp_task_wdt_reconfigure(&wdtConfig);
 #else
   esp_task_wdt_init(3, true);  // 3 seconds, restart the chip when it times out
 #endif
-  esp_task_wdt_add(NULL);  // NULL = watch the task running this code (loop)
+  // C++: NULL is the older C way of writing "no pointer" (nullptr is the
+  //      modern C++ way, used earlier in this file). This ESP32 function
+  //      treats "no task given" as "the task that is calling me", which is
+  //      loopTask, the task that runs setup() and loop().
+  esp_task_wdt_add(NULL);
 }
 
 // C++: loop() runs over and over, thousands of times per second.
@@ -1012,6 +1087,10 @@ void setup() {
 // time passed since I last ran?" using millis(). This lets several jobs run at
 // different rates without blocking each other, a common Arduino pattern
 // sometimes called "blink without delay".
+//
+// ESP32: Between passes of loop(), the Arduino core briefly lets other
+//        FreeRTOS tasks run, so a fast-spinning loop() doesn't starve them.
+//        That is handled for you; nothing in this sketch needs to do it.
 void loop() {
   esp_task_wdt_reset();  // feed the watchdog: "the program is still running fine"
   unsigned long now = millis();  // read the clock once and reuse it

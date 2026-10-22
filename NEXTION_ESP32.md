@@ -6,9 +6,6 @@ How to build the touch screen for `heater_controller_esp32.ino` on a
 **There is no code to write on the screen.** You place the items, name them,
 and tick one box on each button. The ESP32 handles everything else.
 
-> Using the **Uno** sketch instead? That uses a different screen design with
-> code in it. See [NEXTION.md](NEXTION.md).
-
 ![No-code screen layout for the NX4827P043: current temperature, time left and power at the top; target temperature and hold time with - and + buttons; fault message bar; Start and Stop buttons](images/nextion_esp32_layout.svg)
 
 ## How the screen and ESP32 talk
@@ -127,8 +124,24 @@ Wiring (see the README's ESP32 section for everything else):
 | Black (GND) | GND, shared with the 5 V supply's GND |
 | Red (5V) | Separate 5 V supply (≥1 A) |
 
-With the **heaters unplugged**, power everything up, open the Arduino
-Serial Monitor at 9600 baud and check:
+### First: the link test sketch
+
+Before the full controller, upload `nextion_test_esp32/nextion_test_esp32.ino`.
+It only talks to the screen and never touches the relays. Open the Serial
+Monitor at **115200** baud:
+
+- `tTemp` on the screen counts up every second, `tStatus` shows **TEST**, and
+  the `*` blinks. This means ESP32 → screen works and the names match.
+- Every 10 s it prints `link check: ... OK`. This means screen → ESP32 works.
+- Tap each button. You should see `TOUCH ... RELEASED -> bTempDn`, `-> bTempUp`
+  and so on, with the right name for each button. A wrong name means the
+  button order or ids are off.
+- `INVALID VARIABLE` means one of `tTemp`, `tStatus` or `tBeat` is misnamed.
+
+### Then: the full controller
+
+Upload `heater_controller_esp32.ino`. With the **heaters unplugged**, power
+everything up, open the Arduino Serial Monitor at 9600 baud and check:
 
 1. Within a second, the screen shows the room temperature, **IDLE**, 500 and
    60, and the `*` starts blinking.

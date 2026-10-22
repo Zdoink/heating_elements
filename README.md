@@ -2,19 +2,20 @@
 
 **Repository:** https://github.com/Zdoink/heating_elements
 
-Temperature-controlled heating enclosure built around an **Arduino Uno R3**.
-A **Type K thermocouple** measures the enclosure temperature, and the Arduino
+Temperature-controlled heating enclosure built around an **ESP32**.
+A **Type K thermocouple** measures the enclosure temperature, and the ESP32
 uses **PID control** to drive **6 heating elements** through relays, holding a
-steady temperature (default **500 °F**) for a set time. A **Nextion touch
-screen** sets the temperature and time and starts and stops each run.
+steady temperature (default **500 °F**) for a set time. A **Nextion NX4827P043
+touch screen** (4.3", 480 × 272) sets the temperature and time and starts and
+stops each run.
 
 ## How it works
 
 **Reading the temperature.** A Type K thermocouple outputs a very small analog
-voltage (about 22 µV/°F) that the Uno cannot read directly. A **MAX31855** or
-**MAX6675** amplifier board converts it to a digital reading that the Uno reads
-over SPI. Readings are taken every 250 ms and averaged each second to smooth out
-noise.
+voltage (about 22 µV/°F) that the ESP32 cannot read directly. A **MAX31855** or
+**MAX6675** amplifier board converts it to a digital reading that the ESP32
+reads over SPI. Readings are taken every 250 ms and averaged each second to
+smooth out noise.
 
 **Steady control (PID).** Once per second the PID controller compares the
 temperature to the setpoint and calculates how much heater power is needed,
@@ -42,66 +43,29 @@ IDLE --Start--> HEATING --within 5 °F of target--> HOLDING --time up--> DONE
 - **DONE:** time is up and the heaters are off. Press Start to run again.
 - **Stop** turns the heaters off immediately from any state.
 
+**The screen.** The Nextion holds **no code**. It shows what the ESP32 sends it
+and reports which button was tapped. All the logic is in the ESP32. See
+[NEXTION_ESP32.md](NEXTION_ESP32.md).
+
 ## Hardware
 
 | Part | Notes |
 |---|---|
-| Arduino Uno R3 | Controller |
-| MAX31855 **or** MAX6675 board | Thermocouple amplifier with SPI output |
+| ESP32 dev board | Classic ESP32 (ESP32-WROOM / "ESP32 Dev Module") |
+| MAX31855 **or** MAX6675 board | Thermocouple amplifier with SPI output; powered from 3.3 V |
 | Type K thermocouple | Rated well above 500 °F; yellow = +, red = − |
-| 6-channel relay module or 6 SSRs | Each rated for one heater's voltage and current |
+| 6 relays that switch from **3.3 V** | Solid-state relays with 3–32 V DC input recommended; each rated for one heater's voltage and current. See [Relays](#relays-must-work-from-33-v) |
 | 6 heating elements | |
-| Nextion touch screen | Any Nextion model; see [NEXTION.md](NEXTION.md) |
-| 5 V power supply (≥1 A) | Powers the Nextion screen |
+| Nextion NX4827P043 | 4.3", 480 × 272 touch screen; see [NEXTION_ESP32.md](NEXTION_ESP32.md) |
+| 5 V power supply (≥1 A) | Powers the Nextion screen (and the ESP32 through its 5V/VIN pin if you like) |
 | E-stop button | Mushroom-head, latching, with a **normally-closed (NC)** contact; ideally a second NC contact to cut heater power directly |
 | Thermal fuse / high-limit thermostat | Independent hardware backup cutoff |
-
-## Wiring
-
-| From | To (Uno) |
-|---|---|
-| Thermocouple board VCC | 5V |
-| Thermocouple board GND | GND |
-| Thermocouple board SCK / CLK | D13 |
-| Thermocouple board SO / DO | D12 |
-| Thermocouple board CS | D10 |
-| Relay 1 – 6 inputs (IN1–IN6) | D2, D3, D4, D5, D6, D7 |
-| Relay module VCC / GND | 5V / GND |
-| Nextion TX (blue) | D8 |
-| Nextion RX (yellow) | D9 |
-| Nextion GND (black) | GND (and the 5 V supply's GND) |
-| Nextion 5V (red) | Separate 5 V supply, **not** the Uno's 5V pin |
-| E-stop NC contact | Between A0 and GND |
-
-- Thermocouple leads go into the amplifier board's screw terminal (yellow to +,
-  red to −).
-- If the relay module has a JD-VCC jumper, a separate 5 V supply for the relay
-  coils is recommended because 6 coils draw a lot of current.
-- The Nextion must share a ground with the Uno or the two can't communicate.
-- D8 and D9 are fixed by the AltSoftSerial library and can't be changed.
-- **E-stop:** use the button's **normally-closed** contact, so a pressed button
-  *or* a broken wire stops the heaters. No E-stop fitted yet? Put a wire jumper
-  from **A0 to GND**, or the controller will go straight to FAULT at power-up.
-- For a true emergency stop, also wire a second NC contact on the E-stop so it
-  cuts power to the heater relays or contactor directly. Then it works even if
-  the Arduino doesn't.
-
-## Using an ESP32 instead of the Uno
-
-`heater_controller_esp32/heater_controller_esp32.ino` does the same job on an
-ESP32 dev board, with the same control logic and safety shutoffs.
-
-It uses a **no-code Nextion screen** (built for the NX4827P043, 4.3"
-480 × 272). On the screen you only place and name the items and tick
-"Send Component ID" on each button; the ESP32 handles all the button logic.
-See [NEXTION_ESP32.md](NEXTION_ESP32.md). (The Uno uses the screen design in
-[NEXTION.md](NEXTION.md) instead; the two designs are not interchangeable.)
 
 > ⚠️ **The ESP32 is a 3.3 V board.** Its pins must never receive 5 V.
 > Power the thermocouple board from **3V3**, not 5V. Otherwise its data line
 > sends 5 V into the ESP32.
 
-### ESP32 wiring
+## Wiring
 
 | From | To (ESP32 GPIO) |
 |---|---|
@@ -113,48 +77,49 @@ See [NEXTION_ESP32.md](NEXTION_ESP32.md). (The Uno uses the screen design in
 | Relay 1 – 6 inputs | GPIO25, 26, 27, 32, 33, 4 |
 | Nextion TX (blue) | GPIO16 |
 | Nextion RX (yellow) | GPIO17 |
-| Nextion GND / 5V | GND / separate 5 V supply |
-| E-stop NC contact | Between GPIO13 and GND (jumper them if no E-stop yet) |
+| Nextion GND (black) | GND (and the 5 V supply's GND) |
+| Nextion 5V (red) | Separate 5 V supply |
+| E-stop NC contact | Between GPIO13 and GND |
 
-**Pin choice:** these pins avoid the ESP32's boot-sensitive pins
-(GPIO 0, 2, 5, 12, 15), so no heater flicks on at power-up.
+- Thermocouple leads go into the amplifier board's screw terminal (yellow to +,
+  red to −).
+- **Pin choice:** these pins avoid the ESP32's boot-sensitive pins
+  (GPIO 0, 2, 5, 12, 15), so no heater flicks on at power-up.
+- The Nextion must share a ground with the ESP32 or the two can't communicate.
+  Its serial signals are 3.3 V level, so TX/RX connect directly.
+- **E-stop:** use the button's **normally-closed** contact, so a pressed button
+  *or* a broken wire stops the heaters. No E-stop fitted yet? Put a wire jumper
+  from **GPIO13 to GND**, or the controller will go straight to FAULT at power-up.
+  For a long E-stop cable, add a 10 kΩ resistor from GPIO13 to **3V3** to
+  prevent false trips from electrical noise.
+- For a true emergency stop, also wire a second NC contact on the E-stop so it
+  cuts power to the heater relays or contactor directly. Then it works even if
+  the ESP32 doesn't.
 
 ### Relays must work from 3.3 V
 
 A 5 V relay module that turns on with a LOW input may not fully turn **off**
 from the ESP32's 3.3 V "high", which could leave a heater on. Use one of these:
-- **Solid-state relays with a 3–32 V DC input:** recommended. Set `RELAY_ACTIVE_LOW = false`.
+- **Solid-state relays with a 3–32 V DC input:** recommended. Set
+  `RELAY_ACTIVE_LOW = false` in the sketch.
 - **An optocoupler relay module with a JD-VCC jumper:** remove the jumper, power
   VCC from 3V3 and JD-VCC from 5V.
 - **A relay module sold as 3.3 V compatible.**
 
-Check them with `relay_test.ino` (it uses the ESP32 pins automatically)
-before connecting any heaters.
+Check them with `relay_test.ino` before connecting any heaters (see
+[Bring-up order](#bring-up-order)).
 
-### ESP32 software setup
+## Uploading the code to the ESP32
 
-1. In the Arduino IDE, open **Tools → Board → Boards Manager**, search for
-   **esp32** and install **esp32 by Espressif Systems**.
-2. Select **Tools → Board → esp32 → ESP32 Dev Module** (or your exact board).
-3. Install the thermocouple library as in step 3 below. **AltSoftSerial is not
-   needed** on the ESP32.
-4. Open `heater_controller_esp32/heater_controller_esp32.ino`, set `USE_MAX31855`,
-   and upload. If the upload stalls at "Connecting...", hold the board's
-   **BOOT** button until it starts.
+> **Do this with the heaters unplugged.** Only the ESP32, thermocouple board,
+> relays and screen need to be connected while you upload and test.
 
-**Board versions:** the pins above are for the classic ESP32 (ESP32-WROOM /
-ESP32 Dev Module). ESP32-S2, S3 and C3 boards have different pin layouts.
+### 1. Install the Arduino IDE and ESP32 support
 
-## Uploading the code to the Arduino
-
-> **Do this with the heaters unplugged.** Only the Arduino, thermocouple board,
-> relay module and screen need to be connected while you upload and test.
-
-### 1. Install the Arduino IDE
-
-Download and install **Arduino IDE 2** from
-[arduino.cc/en/software](https://www.arduino.cc/en/software). Accept the driver
-install prompts during setup.
+1. Download and install **Arduino IDE 2** from
+   [arduino.cc/en/software](https://www.arduino.cc/en/software).
+2. Open **Tools → Board → Boards Manager**, search for **esp32** and install
+   **esp32 by Espressif Systems**.
 
 ### 2. Download this project
 
@@ -167,55 +132,52 @@ Either:
   git clone https://github.com/Zdoink/heating_elements.git
   ```
 
-You should have a folder containing:
+The Arduino IDE requires each sketch's folder name to match its `.ino` file
+name (e.g. `heater_controller_esp32/heater_controller_esp32.ino`), so keep the
+folder names as they are.
 
-```
-heater_controller/
-└── heater_controller.ino
-```
+### 3. Install the thermocouple library
 
-The Arduino IDE requires the folder name to match the `.ino` file name, so keep
-the `heater_controller` folder name as it is.
-
-### 3. Install the libraries
-
-1. In the Arduino IDE, click the **Library Manager** icon on the left (or
+1. Open the **Library Manager** (icon on the left, or
    **Sketch → Include Library → Manage Libraries…**).
-2. Search for and install:
-   - **AltSoftSerial** by Paul Stoffregen (for the Nextion screen)
-   - MAX31855 board: **Adafruit MAX31855 library**, or
-     MAX6675 board: **MAX6675 library** by Adafruit
+2. Install the library for your board:
+   - MAX31855 board: **Adafruit MAX31855 library**
+   - MAX6675 board: **MAX6675 library** by Adafruit
 3. If asked to install dependencies (such as **Adafruit BusIO**), click **Install All**.
+
+No other libraries are needed. The ESP32's built-in hardware serial port talks
+to the screen.
 
 ### 4. Open and configure the sketch
 
-1. **File → Open…** and select `heater_controller/heater_controller.ino`.
-2. Near the top of the sketch, set the board type:
+1. **File → Open…** and select `heater_controller_esp32/heater_controller_esp32.ino`.
+2. Near the top of the sketch, set the thermocouple board type:
    ```cpp
    #define USE_MAX31855 1  // 1 = MAX31855 board, 0 = MAX6675 board
    ```
    Check the part number printed on the chip on your thermocouple board.
+3. If you use solid-state relays (active-HIGH), set `RELAY_ACTIVE_LOW = false`.
 
-### 5. Connect the Arduino and select it
+### 5. Connect and select the board
 
-1. Plug the Uno into your computer with a USB A-to-B cable.
-2. **Tools → Board → Arduino AVR Boards → Arduino Uno**.
-3. **Tools → Port**, then pick the COM port labeled **Arduino Uno**. If you are
-   unsure which one it is, unplug the Uno, check which port disappears, and
-   plug it back in.
-   - No port shown? Clone Unos often use a **CH340** USB chip that needs a
-     driver. Install the CH340 driver, then reconnect the board.
+1. Plug the ESP32 into your computer with a **data** USB cable (some cables
+   only charge).
+2. **Tools → Board → esp32 → ESP32 Dev Module** (or your exact board).
+3. **Tools → Port**, then pick the ESP32's COM port. Unsure which? Unplug the
+   board, see which port disappears, and plug it back in.
+   - No port shown? Most ESP32 boards use a **CP2102** or **CH340** USB chip.
+     Install that driver, then reconnect.
 
 ### 6. Verify and upload
 
-1. Click **Verify** (✓ checkmark) to compile. It should finish with
-   "Done compiling".
-2. Click **Upload** (→ arrow). The Uno's TX/RX lights blink, then the IDE
-   shows "Done uploading".
+1. Click **Verify** (✓) to compile.
+2. Click **Upload** (→). If it stalls at `Connecting...`, hold the board's
+   **BOOT** button until the upload starts, then release it.
 
 ### 7. Check that it is running
 
-1. Open **Tools → Serial Monitor** and set the speed to **9600 baud**. You should see:
+1. Open **Tools → Serial Monitor** at **9600 baud**. (A few garbled characters
+   right at power-up are the ESP32's boot messages and are normal.) You should see:
    ```
    Heater controller started - press Start (or send G) to run
    Setpoint=500.0F Hold=60min Kp=3.000 Ki=0.0200 Kd=0.000 State=IDLE BadFrames=0
@@ -225,32 +187,38 @@ the `heater_controller` folder name as it is.
 3. **Tools → Serial Plotter** (close the Serial Monitor first) shows the
    temperature, setpoint and output as a live graph.
 
-### 8. Set up the screen
-
-Build and load the screen file by following [NEXTION.md](NEXTION.md).
-
 ### Upload troubleshooting
 
 | Problem | Fix |
 |---|---|
-| `AltSoftSerial.h`, `Adafruit_MAX31855.h` or `max6675.h`: No such file or directory | A library from step 3 isn't installed |
-| `avrdude: stk500_recv(): programmer is not responding` | Wrong port or board selected; close the Serial Monitor and other programs using the port, then try again |
-| No port in Tools → Port | Try another USB cable (some are charge-only) or install the CH340 driver |
+| `Adafruit_MAX31855.h` or `max6675.h`: No such file or directory | The library from step 3 isn't installed |
+| `Failed to connect to ESP32: Timed out waiting for packet header` | Hold the **BOOT** button while uploading; check the port and cable |
+| No port in Tools → Port | Try another USB cable, or install the CP2102 / CH340 driver |
+| Board keeps restarting (`rst:` messages repeat) | Usually a weak USB power supply; try another port or a powered hub |
 | Readings show `Thermocouple fault OPEN` | Thermocouple not connected, or loose in the screw terminal |
+| Readings are wildly wrong or always 0 | Thermocouple board powered from 5V instead of 3V3, or CLK/DO/CS wires swapped |
 | Temperature goes **down** when heated | Thermocouple wires are reversed; swap yellow and red |
 | Random characters in the Serial Monitor | Baud rate is not set to 9600 |
-| Screen shows **NO LINK** | Check TX/RX aren't swapped (Nextion TX → D8), and that the screen and Uno share GND |
-| Serial Monitor shows `Rejected screen frame` | Check the `tm0` code in the Nextion project matches [NEXTION.md](NEXTION.md) |
-| `FAULT: E-stop pressed or E-stop wire broken` right at power-up | E-stop pressed, wired to its NO contact instead of NC, or not fitted: jumper A0 to GND |
-| `Can't start: no link to the screen` | Screen not connected or not sending the `<H>` heartbeat; check the `tm0` code. For USB-only testing see the first power-up check |
+| `FAULT: E-stop pressed or E-stop wire broken` right at power-up | E-stop pressed, wired to its NO contact instead of NC, or not fitted: jumper GPIO13 to GND |
+| `Can't start: no link to the screen` | Screen not connected or not replying; run the link test (see below). For USB-only testing, see "Testing without the screen" |
+| `Touch from unknown component id …` | Screen button ids don't match; see [NEXTION_ESP32.md](NEXTION_ESP32.md) troubleshooting |
 
-### First power-up check
+## Bring-up order
 
-With the heaters unplugged, the E-stop connected (or A0 jumpered to GND) and
-the screen connected, press **Start** on the screen. All relays should click
-**ON**, because room temperature is far below the setpoint. Press **Stop** and
-they should all click **OFF**. If it's the other way round, your relay module
-is active-HIGH: set `RELAY_ACTIVE_LOW = false`.
+Do these in order, **with the heaters unplugged**:
+
+1. **Relays:** upload `relay_test/relay_test.ino`. All six relays should click
+   on and off every 1.5 s, matching ON/OFF in the Serial Monitor (9600 baud).
+   If they're on when it says OFF, set `RELAY_ACTIVE_LOW = false` in both sketches.
+2. **Screen:** build and load the screen ([NEXTION_ESP32.md](NEXTION_ESP32.md)),
+   then upload `nextion_test_esp32/nextion_test_esp32.ino` and check the link,
+   item names and button ids (Serial Monitor at 115200 baud).
+3. **Controller:** upload `heater_controller_esp32/heater_controller_esp32.ino`.
+   Press **Start** on the screen: the relays should click on, because room temperature
+   is far below the setpoint. Press **Stop** and they should click off.
+4. **Safety shutoffs:** test link loss and the E-stop as described at the end
+   of [NEXTION_ESP32.md](NEXTION_ESP32.md).
+5. Only then connect the heaters, and stay with the enclosure for the first runs.
 
 **Testing without the screen:** a run can't start while there is no screen
 link (the Serial Monitor shows `Can't start: no link to the screen`). For bench
@@ -263,29 +231,30 @@ real use.**
 | Control | What it does |
 |---|---|
 | Temp + / − | Change the target in 5 °F steps (100–535 °F) |
-| Time + / − | Change the hold time in 5-minute steps (1–1440 min) |
+| Time + / − | Change the hold time: 5-minute steps up to 2 hours, 15-minute steps above (5–1440 min) |
 | Start | Begin a run: heat up, then hold for the set time |
 | Stop | Turn all heaters off immediately |
 
-The screen shows the current temperature, status, time left in the hold, and
-heater power. Settings can be changed during a run.
+The screen shows the current temperature, status, time left in the hold,
+heater power and any fault reason. Settings can be changed during a run. The
+`*` next to the title blinks while the screen is connected to the ESP32.
 
-### How the Arduino and screen avoid communication errors
+### How the ESP32 and screen avoid communication errors
 
-- **Full-duplex serial (AltSoftSerial):** the Arduino can receive screen
-  commands while it is sending updates, so nothing is dropped.
-- **Framed commands with a check value:** commands look like `<S500,29500>`.
-  The value and check must add up to 30000, or the Arduino rejects the command.
-- **Confirmed delivery:** the screen resends every command until the Arduino
-  reports the new value back.
+- **Hardware serial:** the ESP32's built-in serial port receives in the
+  background while the program runs, so no bytes are dropped.
+- **Strict message checks:** a button tap is only accepted if the message has
+  exactly the right length and type. A garbled message is dropped, never
+  mistaken for a different button. If a tap is lost, the number on screen
+  doesn't change, so you can see it and tap again.
+- **The ESP32 is the only source of truth:** the screen only displays what the
+  ESP32 sends, so it always shows the settings actually in use. It's fully
+  refreshed every second, so a corrupted update fixes itself.
 - **Safe repeats:** a repeated Start doesn't restart the timer, and a repeated
   Stop does nothing extra.
-- **Self-correcting display:** the screen is fully refreshed every second.
-- **Link check, both ways:** the screen shows **NO LINK** if the Arduino stops
-  sending updates for about 3 seconds. The screen sends a heartbeat every 0.5 s,
-  and if it goes quiet for 5 seconds during a run, the Arduino shuts the heaters off.
-
-Full details are in [NEXTION.md](NEXTION.md).
+- **Link check:** every second the ESP32 sends `sendme` and the screen replies
+  by itself. If replies stop for 5 seconds during a run, the heaters shut off.
+- **Screen restarts** are detected and the screen is redrawn immediately.
 
 ## Serial commands
 
@@ -301,12 +270,12 @@ Changes last until the board is reset; copy the values you settle on into the sk
 | `P<value>` | `P3.0` | Set Kp |
 | `I<value>` | `I0.02` | Set Ki |
 | `D<value>` | `D10` | Set Kd |
-| `?` | `?` | Print the current settings, state and rejected-frame count |
+| `?` | `?` | Print the current settings, state and count of unrecognised screen messages |
 
 ## Tuning the PID
 
 The default gains are only a starting point. Every enclosure heats differently,
-so they need tuning on yours. Start a long run (e.g. `M600`, then `G`) and use
+so they need tuning on yours. Start a long run (e.g. `M600`, then Start) and use
 the Serial Plotter to watch the temperature.
 
 1. Start with `I0` and `D0`. Raise `P` until the temperature settles close to
@@ -331,19 +300,24 @@ or `I`, and try again. A well-tuned enclosure should stay well under 20 °F.
 | `READY_BAND_F` | 5.0 | Hold timer starts once within this many °F of the target |
 | `Kp`, `Ki`, `Kd` | 3.0, 0.02, 0.0 | PID gains (output in % of total power) |
 | `INTEGRAL_BAND_F` | 40.0 | Integral only builds within ± this many °F of the setpoint, to prevent warm-up overshoot |
-| `RELAY_PINS` | D2–D7 | Relay input pins for heaters 1–6 |
-| `RELAY_ACTIVE_LOW` | true | `true` for relay modules that switch on with a LOW input |
+| `RELAY_PINS` | GPIO 25, 26, 27, 32, 33, 4 | Relay input pins for heaters 1–6 |
+| `RELAY_ACTIVE_LOW` | true | `true` for relay modules that switch on with a LOW input; `false` for SSRs |
 | `WINDOW_MS` | 10000 | Cycle time for the one switching relay (can be ~2000 with SSRs) |
 | `MIN_PULSE_MS` | 1000 | Shortest relay on/off pulse allowed |
+| `PIN_TC_CLK` / `PIN_TC_DO` / `PIN_TC_CS` | 18 / 19 / 23 | Thermocouple board pins |
+| `PIN_NEX_RX` / `PIN_NEX_TX` | 16 / 17 | Nextion serial pins |
 | `NEX_BAUD` | 9600 | Nextion serial speed (must match the screen) |
+| `ID_TEMP_DN` … `ID_STOP` | 1 … 6 | Screen button component ids |
+| `TEMP_STEP_F` | 5.0 | Temperature change per tap |
+| `MIN_STEP_SHORT` / `MIN_STEP_LONG` / `MIN_STEP_SWITCH` | 5 / 15 / 120 | Hold-time step per tap, and where the bigger step starts (minutes) |
 | `MAX_SAFE_F` | 560.0 | Over-temperature cutoff (°F) |
 | `MAX_BAD_READS` | 4 | Consecutive sensor faults before shutdown |
 | `RUNAWAY_TIME_MS` / `RUNAWAY_MIN_RISE_F` | 10 min / 15 °F | Thermal runaway detection |
 | `OVERSHOOT_LIMIT_F` | 20.0 | Fault if the temperature goes this far above the setpoint during a run |
-| `PIN_ESTOP` | A0 | E-stop input (NC contact to GND) |
+| `PIN_ESTOP` | 13 | E-stop input (NC contact to GND) |
 | `ESTOP_DEBOUNCE_MS` | 20 | E-stop must read open this long before tripping (filters noise) |
 | `REQUIRE_SCREEN_LINK` | true | Shut off if the screen link is lost during a run; `false` only for USB bench testing |
-| `SCREEN_TIMEOUT_MS` | 5000 | How long without a screen heartbeat before shutting off |
+| `SCREEN_TIMEOUT_MS` | 5000 | How long without a reply from the screen before shutting off |
 
 ## Safety features
 
@@ -352,7 +326,8 @@ or `I`, and try again. A well-tuned enclosure should stay well under 20 °F.
 - **Stop:** turns all heaters off immediately.
 - **Run complete:** heaters turn off automatically when the hold time ends.
 
-These faults **latch every heater off** and show **FAULT** until the board is reset:
+These faults **latch every heater off** and show **FAULT** (with the reason on
+the screen) until the board is reset:
 
 - **E-stop:** the E-stop button is pressed, or its wire is broken. This is
   checked on every pass of the program and reacts within about 20 ms.
@@ -360,7 +335,7 @@ These faults **latch every heater off** and show **FAULT** until the board is re
   setpoint (e.g. 520 °F with a 500 °F setpoint). If you lower the setpoint
   mid-run, this check waits until the enclosure has cooled to within 20 °F
   of the new setpoint before it applies.
-- **Screen link lost:** during a run, no heartbeat from the screen for 5 seconds.
+- **Screen link lost:** during a run, no reply from the screen for 5 seconds.
 - **Over-temperature:** the temperature reaches `MAX_SAFE_F` (560 °F), whatever the setpoint.
 - **Sensor fault:** the thermocouple is open or shorted for about 1 second.
 - **Thermal runaway:** the heaters run near full power for 10 minutes without
@@ -369,52 +344,50 @@ These faults **latch every heater off** and show **FAULT** until the board is re
 
 Two more protections:
 
-- **Watchdog:** if the code hangs, the board resets within 2 seconds, which turns the heaters off.
-- **Safe startup:** all relays are set to OFF before the pins are enabled at boot.
+- **Watchdog:** if the code hangs, the ESP32 restarts within 3 seconds, which
+  turns the heaters off.
+- **Safe startup:** the relay pins are set to OFF as soon as they're enabled,
+  and the chosen pins don't glitch during boot.
 
-The screen never controls the heaters directly. If it disconnects mid-run, the
-Arduino keeps controlling the temperature and finishes the run.
+The screen never controls the heaters directly. It only reports taps. If it
+disconnects mid-run, the link check shuts the heaters off.
 
-> ⚠️ **Mains voltage warning:** Never drive a heater directly from an Arduino
-> pin. Use relays rated for each heater's voltage and current, fuse the
-> circuit, and add an independent high-limit thermostat or thermal fuse so the
-> heaters shut off even if the Arduino or a relay fails (relays can fail welded
-> ON). Keep the thermocouple wiring away from mains wiring to avoid noisy readings.
+> ⚠️ **Mains voltage warning:** Never drive a heater directly from an ESP32
+> pin. Use relays rated for each heater's voltage and current, protect each
+> circuit with a correctly sized breaker or fuse, and add an independent
+> high-limit thermostat or thermal fuse so the heaters shut off even if the
+> ESP32 or a relay fails (relays can fail welded ON). Keep the thermocouple
+> wiring away from mains wiring to avoid noisy readings.
 
 ## Relay choice
 
 PID control switches one relay every few seconds. Mechanical relays are
 typically rated for about 100,000 operations, so the switching relay will wear
-out over time. **Solid-state relays (SSRs)** are recommended for all six heaters. At a
-minimum, use them on the heater that does the switching once the enclosure is
-holding temperature (e.g. at ~40 % output, that is heater 3). With SSRs, `WINDOW_MS` can be
-lowered to about 2000 for even steadier control.
+out over time. **Solid-state relays (SSRs)** with a 3–32 V DC input are
+recommended for all six heaters: they last far longer and switch directly
+from the ESP32's 3.3 V. With SSRs, `WINDOW_MS` can be lowered to about 2000 for
+even steadier control.
 
 ## Project structure
 
 ```
 heating_elements/
 ├── README.md
-├── NEXTION.md                  Nextion screen build guide (Uno, 480 × 320)
-├── NEXTION_ESP32.md            No-code Nextion screen guide (ESP32, NX4827P043 480 × 272)
+├── NEXTION_ESP32.md            Nextion screen build guide (NX4827P043, no code on the screen)
 ├── images/
-│   ├── nextion_layout.svg      Screen layout picture used in NEXTION.md
 │   └── nextion_esp32_layout.svg  Screen layout picture used in NEXTION_ESP32.md
-├── heater_controller/
-│   └── heater_controller.ino   Arduino Uno sketch
 ├── heater_controller_esp32/
-│   └── heater_controller_esp32.ino   Same controller for an ESP32
+│   └── heater_controller_esp32.ino   The heater controller
+├── nextion_test_esp32/
+│   └── nextion_test_esp32.ino  ESP32 ↔ Nextion link test (no relays used)
 └── relay_test/
-    └── relay_test.ino          Relay wiring test (Uno or ESP32): all relays on/off every 1.5 s
+    └── relay_test.ino          Relay wiring test: all relays on/off every 1.5 s
 ```
-
-To check relay wiring before using the main sketch, upload `relay_test.ino`
-with the heaters unplugged. The relays should click on and off every 1.5
-seconds, matching the ON/OFF messages in the Serial Monitor.
 
 ## Roadmap
 
 - [x] Nextion touch screen for setpoint, hold time, start and stop
 - [ ] Multi-step profiles (e.g. 300 °F for 30 min, then 500 °F for 60 min)
-- [ ] Save settings and tuned PID values to EEPROM
+- [ ] Save settings and tuned PID values to flash, so they survive a restart
+- [ ] Wi-Fi monitoring from a phone
 - [ ] Rotate which heater does the switching to spread relay wear
