@@ -261,6 +261,18 @@ heater power and any fault reason. Settings can be changed during a run. The
 Type into the Serial Monitor and press Enter. These work alongside the screen.
 Changes last until the board is reset; copy the values you settle on into the sketch.
 
+Screen buttons and typed commands go through the same command handler in
+the sketch (`doCommand()`). Each screen button is simply one of these
+commands: +/− temp sends `S` with the new target, +/− time sends `M`, Start
+sends `G` and Stop sends `X`. Every command is logged in the Serial Monitor
+with where it came from, for example:
+
+```
+[screen] S505
+[usb] M90
+[screen] G
+```
+
 | Command | Example | Effect |
 |---|---|---|
 | `S<temp>` | `S500` | Set the setpoint in °F |

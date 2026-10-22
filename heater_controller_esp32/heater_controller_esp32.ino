@@ -272,6 +272,11 @@ const unsigned long PID_INTERVAL_MS  = 1000;  // PID runs on the 1 s average of 
 //      variable "state" can hold one of these five values.
 enum RunState : uint8_t { IDLE = 0, HEATING = 1, HOLDING = 2, DONE = 3, FAULT = 4 };
 RunState state = IDLE;
+
+// Where a command came from: typed in the Serial Monitor, or tapped on the
+// screen. Every command goes through doCommand() either way (see below);
+// this is only used to label the log line, e.g. "[screen] G".
+enum CommandSource : uint8_t { FROM_USB, FROM_SCREEN };
 unsigned long holdStartMs = 0;  // millis() time when the hold timer started
 
 // C++: The * makes this a POINTER: instead of holding text itself, it holds
@@ -675,7 +680,29 @@ unsigned long secondsLeft(unsigned long now) {
   return total;  // not started holding yet: show the full time
 }
 
-// ---------------- USB Serial commands ----------------
+// ---------------- Commands (shared by USB and the screen) ----------------
+//
+// Every command, whether typed in the Serial Monitor or tapped on the screen,
+// is carried out in ONE place: doCommand(). The two inputs only translate
+// what they receive into a command letter and a number:
+//
+//   Serial Monitor  "S500" --+
+//                            +--> doCommand('S', 500, ...) --> setSetpoint(500)
+//   Screen          +temp ---+    (the tap becomes 'S', current target + 5)
+//
+//   Serial Monitor  "G" -----+
+//                            +--> doCommand('G', 0, ...) ---> startRun()
+//   Screen          Start ---+
+//
+// So changing what a command does, or adding a new one, is a single edit.
+//
+//   Letter  Number          Action
+//   S       temperature F   set the target temperature
+//   M       minutes         set the hold time
+//   G       (none)          start a run
+//   X       (none)          stop: all heaters off
+//   P/I/D   gain            set the PID gains (Serial Monitor only)
+//   ?       (none)          print the current settings
 
 void printSettings() {
   // C++: print(value, 1) prints a float with 1 decimal place. print() has
@@ -691,7 +718,63 @@ void printSettings() {
   Serial.print(F(" BadFrames=")); Serial.println(badFrames);
 }
 
-// Run one command typed in the Serial Monitor, e.g. "S500" or "G".
+void printHelp() {
+  Serial.println(F("Commands: S<setpoint F> M<minutes> G X P<kp> I<ki> D<kd> ?"));
+}
+
+// Does this command letter need a number after it?
+// C++: A function that just answers a yes/no question about its input is a
+//      common way to give a condition a readable name.
+bool needsNumber(char key) {
+  return key == 'S' || key == 'M' || key == 'P' || key == 'I' || key == 'D';
+}
+
+// Carry out one command. THE single place where commands take effect.
+//   key   - the command letter, e.g. 'S'
+//   value - its number (ignored by commands that don't need one)
+//   src   - where it came from, only used for the log line
+// Returns true if the command was carried out.
+bool doCommand(char key, float value, CommandSource src) {
+  // Log every command with its source, e.g. "[screen] S505" or "[usb] G",
+  // so the Serial Monitor shows exactly what happened and who asked for it.
+  // C++: The ternary operator can pick between two F() strings too.
+  Serial.print(src == FROM_SCREEN ? F("[screen] ") : F("[usb] "));
+  Serial.print(key);
+  if (key == 'S' || key == 'M') Serial.print((long)value);
+  else if (needsNumber(key))    Serial.print(value, 4);  // PID gains need decimals
+  Serial.println();
+
+  bool ok = true;
+  // C++: Each case ends with "break", which jumps out of the switch. Without
+  //      it, execution would "fall through" into the next case too.
+  //      "default" runs when no case matches.
+  switch (key) {
+    case 'S':
+      ok = setSetpoint(value);
+      if (!ok) Serial.println(F("Setpoint out of range (100-535 F)"));
+      break;
+    case 'M':
+      ok = setDuration((long)value);
+      if (!ok) Serial.println(F("Hold time out of range (1-1440 min)"));
+      break;
+    case 'G': startRun(); break;  // prints its own message if it can't start
+    case 'X': stopRun();  break;
+    case 'P': Kp = value; break;
+    case 'I': Ki = value; break;
+    case 'D': Kd = value; break;
+    case '?': printSettings(); return true;  // changes nothing on screen
+    default:
+      printHelp();
+      return false;
+  }
+
+  nexUpdateNow = true;  // show the result on the screen straight away
+  if (ok && needsNumber(key)) printSettings();
+  return ok;
+}
+
+// Turn one line typed in the Serial Monitor (e.g. "S500" or "g") into a
+// command and pass it to doCommand().
 //
 // C++: "char *cmd" is a pointer to the first character of a C string.
 //      cmd[0] is the first character, cmd[1] the second, and so on.
@@ -700,37 +783,17 @@ void runCommand(char *cmd) {
   //      'S' in single quotes is ONE character; "S" in double quotes is a
   //      string (the character plus a '\0' terminator). They are different types.
   char key = toupper(cmd[0]);
-  switch (key) {
-    case '?': printSettings(); return;
-    case 'G': startRun(); nexUpdateNow = true; return;
-    case 'X': stopRun();  nexUpdateNow = true; return;
+
+  // A letter that needs a number but didn't get one, e.g. just "S".
+  if (needsNumber(key) && cmd[1] == '\0') {
+    printHelp();
+    return;
   }
 
-  // The remaining commands need a number after the letter.
-  if (cmd[1] == '\0') key = 0;  // no number given -> falls to "default" below
   // C++: cmd + 1 is POINTER ARITHMETIC: a pointer to the 2nd character, so
-  //      atof() (text to float) reads "500" from "S500".
-  float v = atof(cmd + 1);
-
-  // C++: Each case ends with "break", which jumps out of the switch. Without
-  //      it, execution would "fall through" into the next case too.
-  //      "default" runs when no case matches.
-  switch (key) {
-    case 'S':
-      if (!setSetpoint(v)) Serial.println(F("Setpoint out of range"));
-      break;
-    case 'M':
-      if (!setDuration((long)v)) Serial.println(F("Hold time out of range (1-1440 min)"));
-      break;
-    case 'P': Kp = v; break;
-    case 'I': Ki = v; break;
-    case 'D': Kd = v; break;
-    default:
-      Serial.println(F("Commands: S<setpoint F> M<minutes> G X P<kp> I<ki> D<kd> ?"));
-      return;
-  }
-  nexUpdateNow = true;  // show the change on the screen right away
-  printSettings();
+  //      atof() (text to float) reads "500" from "S500". For "G" it reads an
+  //      empty string and returns 0, which G ignores.
+  doCommand(key, atof(cmd + 1), FROM_USB);
 }
 
 // Collect characters typed in the Serial Monitor until Enter is pressed.
@@ -869,8 +932,9 @@ void markScreenAlive() {
   lastScreenMs = millis();
 }
 
-// Change the hold time by one tap: 5-minute steps up to 2 hours, 15 above.
-void stepDuration(bool up) {
+// Work out the hold time after one tap of + or -: 5-minute steps up to
+// 2 hours, 15 above. It only calculates; doCommand() does the change.
+long nextDuration(bool up) {
   // C++: m is a "long" (SIGNED: it can be negative) even though durationMin
   //      is UNSIGNED. If m were unsigned, 5 - 15 would not give -10: it would
   //      wrap around to about 4.29 billion, and constrain() below would then
@@ -885,37 +949,39 @@ void stepDuration(bool up) {
   // C++: constrain() keeps the result inside the allowed range, so tapping
   //      past either end just stops there. The (long) casts make all three
   //      values the same type.
-  setDuration(constrain(m, (long)MIN_STEP_SHORT, (long)MAX_DURATION_MIN));
+  return constrain(m, (long)MIN_STEP_SHORT, (long)MAX_DURATION_MIN);
+}
+
+// The target temperature after one tap of + or - (kept inside the allowed range).
+float nextSetpoint(bool up) {
+  float t = up ? setpointF + TEMP_STEP_F : setpointF - TEMP_STEP_F;
+  return constrain(t, MIN_SETPOINT_F, MAX_SAFE_F - 25);
 }
 
 // A button was tapped. "id" is the button's component id (see ID_... above).
+// Each button is translated into the same command you could type in the
+// Serial Monitor, then handed to doCommand(), e.g. Start becomes 'G'.
 void handleTouch(uint8_t id) {
   // C++: case labels can be named constants, as long as they are "const"
   //      values the compiler knows in advance.
   //
-  // C++: setSetpoint() returns true/false (accepted or not), but here the
-  //      result isn't stored. C++ lets you ignore a return value. It's safe
-  //      because constrain() already keeps the value inside the allowed
-  //      range, so it will always be accepted.
+  // C++: doCommand() returns true/false, but the result isn't stored here.
+  //      C++ lets you ignore a return value. It's safe because nextSetpoint()
+  //      and nextDuration() already keep the values inside the allowed range.
   switch (id) {
-    case ID_TEMP_DN:
-      setSetpoint(constrain(setpointF - TEMP_STEP_F, MIN_SETPOINT_F, MAX_SAFE_F - 25));
-      break;
-    case ID_TEMP_UP:
-      setSetpoint(constrain(setpointF + TEMP_STEP_F, MIN_SETPOINT_F, MAX_SAFE_F - 25));
-      break;
-    case ID_MIN_DN: stepDuration(false); break;
-    case ID_MIN_UP: stepDuration(true);  break;
-    case ID_START:  startRun(); break;
-    case ID_STOP:   stopRun();  break;
+    case ID_TEMP_DN: doCommand('S', nextSetpoint(false), FROM_SCREEN); break;
+    case ID_TEMP_UP: doCommand('S', nextSetpoint(true),  FROM_SCREEN); break;
+    case ID_MIN_DN:  doCommand('M', nextDuration(false), FROM_SCREEN); break;
+    case ID_MIN_UP:  doCommand('M', nextDuration(true),  FROM_SCREEN); break;
+    case ID_START:   doCommand('G', 0, FROM_SCREEN); break;
+    case ID_STOP:    doCommand('X', 0, FROM_SCREEN); break;
     default:
       // A component we don't know. Usually means the IDs don't match the
       // ID_... constants: check each button's "id" in Nextion Editor.
       Serial.print(F("Touch from unknown component id "));
       Serial.println(id);
-      return;
+      break;
   }
-  nexUpdateNow = true;  // show the result on the screen straight away
 }
 
 // Act on one complete message (the bytes before the FF FF FF).
